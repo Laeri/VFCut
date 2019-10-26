@@ -117,6 +117,8 @@ def connect_server(options):
                     time.append(dt[1])
                 elif dt[0] == "output":
                     output = dt[1]
+                elif dt[0] == "quit":
+                    exit(0)
                 if len(time) >= 2:
                     open_confirm_window(options)
                 conn, addr = s.accept()
@@ -140,6 +142,7 @@ def main():
     parser.add_option("-o", dest="output", help="store clip in output file", metavar="FILE")
     parser.add_option("-t", "--time", dest="time", help="supply start or end time", metavar="TIME")
     parser.add_option("-i", "--input", dest="input", help="supply an input .mp4 file", metavar="INPUT")
+    parser.add_option("-e", "--exit", "--quit", dest="quit", help="close server", metavar="QUIT")
 
     (options, args) = parser.parse_args()
     try:
@@ -151,6 +154,8 @@ def main():
             send_to_server(to_bin("input " + options.input))
         if options.output:
             send_to_server(to_bin("output " + options.output))
+        if options.quit:
+            send_to_server(to_bin("quit " + options.quit))
 
 
 if __name__ == "__main__":
