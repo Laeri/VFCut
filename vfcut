@@ -1,0 +1,157 @@
+#!/usr/bin/python3
+
+import socket
+import tkinter
+import os
+from tkinter import *
+from optparse import OptionParser
+from tkinter import filedialog
+
+HOST = '127.0.0.1'
+PORT = 65442
+
+# 1. supply begin time
+# vfcut -t 00:00:00 -i somefile.mp4
+# 2. supply end time
+# vfcut -t 00:01:40 -i somefile.mp4
+# 3. open tkinter window
+# 4. type in filename
+# 5. type in description
+# 6. press enter to save or type in metadata
+# 7. use ffmpeg to cut video (given by mpv)
+
+
+time = []
+in_file = None
+out_file = None
+description = None
+
+
+def open_confirm_window(options):
+    root = tkinter.Tk()
+    root.title("VFCut")
+    title = Label(root,
+                  text="VFCut",
+                  fg="light green",
+                  bg="dark green",
+                  font="Helvetica 16 bold italic")
+    title.grid(row=0, column=0)
+
+    label_start = Label(root, text="Start: ")
+    label_start.grid(row=1, column=0)
+    entry_start = Entry(root)
+    entry_start.insert(END, time[0])
+    entry_start.grid(row=1, column=1)
+
+    label_end = Label(root, text="Stop:")
+    label_end.grid(row=2, column=0)
+    entry_end = Entry(root)
+    entry_end.insert(END, time[1])
+    entry_end.grid(row=2, column=1)
+
+    def load_file():
+        print("load")
+        root.filename = filedialog.askopenfilename(initialdir="/", title="Select file",
+                                                   filetypes=(("jpeg files", "*.jpg"), ("all files", "*.*")))
+        print(root.filename)
+    in_file = options.input.strip()
+
+    base_folder = os.path.dirname(options.input.strip())
+    default_folder = os.path.join(base_folder, "clips/")
+    print(default_folder)
+    if not os.path.exists(default_folder):
+        os.makedirs(default_folder)
+        print('create new folder: ' + default_folder)
+    label_output_folder = Label(root, text="Output Folder:")
+    label_output_folder.grid(row=3, column=0)
+    entry_output_folder = Entry(root)
+    entry_output_folder.insert(END, default_folder)
+    entry_output_folder.grid(row=3, column=1)
+    output_button = Button(root, text="Browse", command=load_file, width=10)
+    output_button.grid(row=3, column=2, sticky=W)
+
+    label_filename = Label(root, text="Name of File: ")
+    label_filename.grid(row=4, column=0)
+    # helptext.pack()
+
+    entry_name = Entry(root)
+    entry_name.grid(row=5, column=1)
+    entry_name.focus()
+
+    def name_input(event):
+        out_file = os.path.join(default_folder, entry_name.get())
+        if not out_file.endswith(".mp4"):
+            out_file += ".mp4"
+        print('Create file: ' + out_file)
+        ffmpeg_command = f" -i {in_file} -ss {time[0]}  -t {time[1]} {out_file}"
+        print('run: ffmpeg' + "".join(ffmpeg_command))
+        os.system("ffmpeg " + ffmpeg_command)
+        time.clear()
+        root.quit()
+
+    entry_name.bind('<Return>', name_input)
+    root.geometry('500x450')
+    root.mainloop()
+
+
+def connect_server(options):
+    if options.time:
+        time.append(options.time.trim())
+    if options.input:
+        in_file = options.input
+    if options.output:
+        out_file = options.output
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind((HOST, PORT))
+        s.listen()
+        conn, addr = s.accept()
+        with conn:
+            while True:
+                data = conn.recv(1024)
+                if not data:
+                    break
+                data_str = data.decode('ascii')
+                dt = data_str.split()
+                if dt[0] == "time":
+                    time.append(dt[1])
+                elif dt[0] == "output":
+                    output = dt[1]
+                if len(time) >= 2:
+                    open_confirm_window(options)
+                conn, addr = s.accept()
+
+
+def send_to_server(message):
+    print('send to server ' + str(message))
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect((HOST, PORT))
+        s.sendall(message)
+
+
+def to_bin(a_str):
+    return a_str.encode('ascii')
+
+
+def main():
+    if os.fork():
+        sys.exit()
+    parser = OptionParser()
+    parser.add_option("-o", dest="output", help="store clip in output file", metavar="FILE")
+    parser.add_option("-t", "--time", dest="time", help="supply start or end time", metavar="TIME")
+    parser.add_option("-i", "--input", dest="input", help="supply an input .mp4 file", metavar="INPUT")
+
+    (options, args) = parser.parse_args()
+    try:
+        connect_server(options)
+    except:
+        if options.time:
+            send_to_server(to_bin("time " + options.time))
+        if options.input:
+            send_to_server(to_bin("input " + options.input))
+        if options.output:
+            send_to_server(to_bin("output " + options.output))
+
+
+if __name__ == "__main__":
+    main()
