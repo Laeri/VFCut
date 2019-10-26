@@ -96,7 +96,7 @@ def open_confirm_window(options):
 
 def connect_server(options):
     if options.time:
-        time.append(options.time.trim())
+        time.append(options.time.strip())
     if options.input:
         in_file = options.input
     if options.output:
