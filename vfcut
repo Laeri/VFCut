@@ -29,6 +29,11 @@ description = None
 
 def open_confirm_window(options):
     root = tkinter.Tk()
+
+    def on_closing():
+        time.clear()
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+
     root.title("VFCut")
     title = Label(root,
                   text="VFCut",
@@ -83,11 +88,15 @@ def open_confirm_window(options):
         if not out_file.endswith(".mp4"):
             out_file += ".mp4"
         print('Create file: ' + out_file)
-        ffmpeg_command = f" -i {in_file} -ss {time[0]}  -t {time[1]} {out_file}"
-        print('run: ffmpeg' + "".join(ffmpeg_command))
-        os.system("ffmpeg " + ffmpeg_command)
+        child = os.fork()
+        if child == 0:
+            ffmpeg_command = f" -i {in_file} -ss {time[0]} -to {time[1]} {out_file}"
+            print('run: ffmpeg' + "".join(ffmpeg_command))
+            os.system("ffmpeg " + ffmpeg_command)
+            exit(0)
         time.clear()
-        root.quit()
+        root.destroy()
+
 
     entry_name.bind('<Return>', name_input)
     root.geometry('500x450')
