@@ -151,7 +151,7 @@ class VFCutServer:
                                                        filetypes=(("jpeg files", "*.jpg"), ("all files", "*.*")))
             print(root.filename)
 
-        in_file = options.input.strip()
+        in_file = options.input.strip().replace(' ', '\ ')
 
         base_folder = os.path.dirname(options.input.strip())
         default_folder = os.path.join(base_folder, "clips/")
