@@ -42,7 +42,6 @@ class VFCutServer:
         if options.status:
             self.print_status()
 
-
     def print_status(self):
         print("VFCUT Status:")
         if not self.running:
@@ -90,15 +89,14 @@ class VFCutServer:
         root = tkinter.Tk()
 
         bg_color = '#0074D9'
-        button_color = '#078cff' #bg_color #'#001f3f'
-        title_font_color='black'
-        label_bg_color=bg_color
-        entry_bg_color='#bbe0ff'
+        button_color = '#078cff'  # bg_color #'#001f3f'
+        title_font_color = 'black'
+        label_bg_color = bg_color
+        entry_bg_color = '#bbe0ff'
 
         root.configure(bg=bg_color)
 
         def on_closing():
-            print('close')
             self.time.clear()
             root.destroy()
 
@@ -118,7 +116,6 @@ class VFCutServer:
         label_start = Label(root, text="Start:", bg=label_bg_color)
         label_start.grid(row=row, column=0)
 
-
         entry_start = Entry(root, bg=entry_bg_color)
         entry_start.insert(END, self.time[0])
         entry_start.grid(row=row, column=1)
@@ -128,7 +125,6 @@ class VFCutServer:
 
         set_start_again = Button(root, text="Reset Start", command=reset_start, width=9, bg=button_color)
         set_start_again.grid(row=row, column=2)
-
 
         row += 1
         label_end = Label(root, text="Stop:", bg=label_bg_color)
@@ -145,8 +141,8 @@ class VFCutServer:
         set_stop_again.grid(row=row, column=2)
 
         row += 1
+
         def load_file():
-            print("load")
             root.filename = filedialog.askopenfilename(initialdir="/", title="Select file",
                                                        filetypes=(("jpeg files", "*.jpg"), ("all files", "*.*")))
             print(root.filename)
@@ -156,15 +152,14 @@ class VFCutServer:
         base_folder = os.path.dirname(options.input.strip())
         default_folder = os.path.join(base_folder, "clips/")
 
-
         if not os.path.exists(default_folder):
             os.makedirs(default_folder)
-            print('create new folder: ' + default_folder)
+
         label_output_folder = Label(root, text="Output Folder:", bg=label_bg_color)
         label_output_folder.grid(row=row, column=0)
         entry_output_folder = Entry(root, bg=entry_bg_color)
         entry_output_folder.insert(END, default_folder)
-        entry_output_folder.grid(row=row, column=1,padx=10)
+        entry_output_folder.grid(row=row, column=1, padx=10)
         output_button = Button(root, text="Browse", command=load_file, width=9, bg=button_color)
         output_button.grid(row=row, column=2, sticky=W)
 
@@ -180,11 +175,11 @@ class VFCutServer:
             out_file = os.path.join(default_folder, entry_name.get())
             if not out_file.endswith(".mp4"):
                 out_file += ".mp4"
-            print('Create file: ' + out_file)
+
             child = os.fork()
             if child == 0:
                 ffmpeg_command = f" -i {in_file} -ss {self.time[0]} -to {self.time[1]} {out_file}"
-                print('run: ffmpeg' + "".join(ffmpeg_command))
+                #print('run: ffmpeg' + "".join(ffmpeg_command))
                 os.system("ffmpeg " + ffmpeg_command)
                 send_to_server(to_bin("finished " + str(os.getpid())))
                 exit(0)
@@ -198,20 +193,15 @@ class VFCutServer:
         create_button = Button(root, text="Create", command=create_cut, width=9, bg=button_color)
         create_button.grid(row=row, column=1, pady=10)
 
-
         row += 1
 
         clear_button = Button(root, text="Cancel", command=on_closing, width=9, height=1, bg=button_color)
         clear_button.grid(row=row, column=0, pady=10)
 
-
-
         row += 2
 
         label_help = Label(root, text="Insert filename and hit enter or click 'Create' button", bg=label_bg_color)
         label_help.grid(row=row, column=0, columnspan=4, pady=30)
-
-
 
         entry_name.bind('<Return>', create_cut)
         root.geometry('500x450')
@@ -219,7 +209,6 @@ class VFCutServer:
 
 
 def send_to_server(message):
-    print('send to server ' + str(message))
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect((HOST, PORT))
         s.sendall(message)
@@ -242,8 +231,10 @@ def main():
     parser.add_option("-o", dest="output", help="store clip in output file", metavar="FILE")
     parser.add_option("-t", "--time", dest="time", help="supply start or end time", metavar="TIME")
     parser.add_option("-i", "--input", dest="input", help="supply an input .mp4 file", metavar="INPUT")
-    parser.add_option("-q", "-e", "-k", "--exit", "--quit", action="store_true", dest="quit", help="close server", metavar="QUIT")
-    parser.add_option("-s", "--status", action="store_true", dest="status", help="show status (running jobs)", metavar="STATUS")
+    parser.add_option("-q", "-e", "-k", "--exit", "--quit", action="store_true", dest="quit", help="close server",
+                      metavar="QUIT")
+    parser.add_option("-s", "--status", action="store_true", dest="status", help="show status (running jobs)",
+                      metavar="STATUS")
     (options, args) = parser.parse_args()
 
     if all(x is None for x in vars(options).values()):
@@ -271,8 +262,6 @@ def main():
             send_to_server(to_bin("quit " + options.quit))
         if options.status:
             send_to_server(to_bin("status"))
-        if options.quit:
-            send_to_server(to_bin("quit"))
 
 
 if __name__ == "__main__":
