@@ -176,7 +176,7 @@ class VFCutServer:
         entry_name.grid(row=row, column=1)
         entry_name.focus()
 
-        def create_cut():
+        def create_cut(event=None):
             out_file = os.path.join(default_folder, entry_name.get())
             if not out_file.endswith(".mp4"):
                 out_file += ".mp4"
@@ -242,7 +242,7 @@ def main():
     parser.add_option("-o", dest="output", help="store clip in output file", metavar="FILE")
     parser.add_option("-t", "--time", dest="time", help="supply start or end time", metavar="TIME")
     parser.add_option("-i", "--input", dest="input", help="supply an input .mp4 file", metavar="INPUT")
-    parser.add_option("-q", "--exit", "--quit", action="store_true", dest="quit", help="close server", metavar="QUIT")
+    parser.add_option("-q", "-e", "-k", "--exit", "--quit", action="store_true", dest="quit", help="close server", metavar="QUIT")
     parser.add_option("-s", "--status", action="store_true", dest="status", help="show status (running jobs)", metavar="STATUS")
     (options, args) = parser.parse_args()
     try:
