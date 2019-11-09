@@ -10,6 +10,7 @@ from tkinter import filedialog
 HOST = '127.0.0.1'
 PORT = 65442
 
+
 # 1. supply begin time
 # vfcut -t 00:00:00 -i somefile.mp4
 # 2. supply end time
@@ -21,100 +22,25 @@ PORT = 65442
 # 7. use ffmpeg to cut video (given by mpv)
 
 
-time = []
-in_file = None
-out_file = None
-description = None
+class VFCutServer:
 
+    def __init__(self, vfcut_socket, options):
+        self.socket = vfcut_socket
+        self.options = options
+        self.time = []
+        self.in_file = None
+        self.out_file = None
+        self.description = None
+        if options.time:
+            self.time.append(options.time.strip())
+        if options.input:
+            self.in_file = options.input
+        if options.output:
+            self.out_file = options.output
 
-def open_confirm_window(options):
-    root = tkinter.Tk()
-
-    def on_closing():
-        time.clear()
-    root.protocol("WM_DELETE_WINDOW", on_closing)
-
-    root.title("VFCut")
-    title = Label(root,
-                  text="VFCut",
-                  fg="light green",
-                  bg="dark green",
-                  font="Helvetica 16 bold italic")
-    title.grid(row=0, column=0)
-
-    label_start = Label(root, text="Start: ")
-    label_start.grid(row=1, column=0)
-    entry_start = Entry(root)
-    entry_start.insert(END, time[0])
-    entry_start.grid(row=1, column=1)
-
-    label_end = Label(root, text="Stop:")
-    label_end.grid(row=2, column=0)
-    entry_end = Entry(root)
-    entry_end.insert(END, time[1])
-    entry_end.grid(row=2, column=1)
-
-    def load_file():
-        print("load")
-        root.filename = filedialog.askopenfilename(initialdir="/", title="Select file",
-                                                   filetypes=(("jpeg files", "*.jpg"), ("all files", "*.*")))
-        print(root.filename)
-    in_file = options.input.strip()
-
-    base_folder = os.path.dirname(options.input.strip())
-    default_folder = os.path.join(base_folder, "clips/")
-    print(default_folder)
-    if not os.path.exists(default_folder):
-        os.makedirs(default_folder)
-        print('create new folder: ' + default_folder)
-    label_output_folder = Label(root, text="Output Folder:")
-    label_output_folder.grid(row=3, column=0)
-    entry_output_folder = Entry(root)
-    entry_output_folder.insert(END, default_folder)
-    entry_output_folder.grid(row=3, column=1)
-    output_button = Button(root, text="Browse", command=load_file, width=10)
-    output_button.grid(row=3, column=2, sticky=W)
-
-    label_filename = Label(root, text="Name of File: ")
-    label_filename.grid(row=4, column=0)
-    # helptext.pack()
-
-    entry_name = Entry(root)
-    entry_name.grid(row=5, column=1)
-    entry_name.focus()
-
-    def name_input(event):
-        out_file = os.path.join(default_folder, entry_name.get())
-        if not out_file.endswith(".mp4"):
-            out_file += ".mp4"
-        print('Create file: ' + out_file)
-        child = os.fork()
-        if child == 0:
-            ffmpeg_command = f" -i {in_file} -ss {time[0]} -to {time[1]} {out_file}"
-            print('run: ffmpeg' + "".join(ffmpeg_command))
-            os.system("ffmpeg " + ffmpeg_command)
-            exit(0)
-        time.clear()
-        root.destroy()
-
-
-    entry_name.bind('<Return>', name_input)
-    root.geometry('500x450')
-    root.mainloop()
-
-
-def connect_server(options):
-    if options.time:
-        time.append(options.time.strip())
-    if options.input:
-        in_file = options.input
-    if options.output:
-        out_file = options.output
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind((HOST, PORT))
-        s.listen()
-        conn, addr = s.accept()
+    def listen_connections(self):
+        self.socket.listen()
+        conn, addr = self.socket.accept()
         with conn:
             while True:
                 data = conn.recv(1024)
@@ -123,14 +49,90 @@ def connect_server(options):
                 data_str = data.decode('ascii')
                 dt = data_str.split()
                 if dt[0] == "time":
-                    time.append(dt[1])
+                    self.time.append(dt[1])
                 elif dt[0] == "output":
                     output = dt[1]
                 elif dt[0] == "quit":
                     exit(0)
-                if len(time) >= 2:
-                    open_confirm_window(options)
-                conn, addr = s.accept()
+                if len(self.time) >= 2:
+                    self.open_confirm_window(self.options)
+                conn, addr = self.socket.accept()
+
+    def open_confirm_window(self, options):
+        root = tkinter.Tk()
+
+        def on_closing():
+            self.time.clear()
+            root.destroy()
+
+        root.protocol("WM_DELETE_WINDOW", on_closing)
+
+        root.title("VFCut")
+        title = Label(root,
+                      text="VFCut",
+                      fg="light green",
+                      bg="dark green",
+                      font="Helvetica 16 bold italic")
+        title.grid(row=0, column=0)
+
+        label_start = Label(root, text="Start: ")
+        label_start.grid(row=1, column=0)
+        entry_start = Entry(root)
+        entry_start.insert(END, self.time[0])
+        entry_start.grid(row=1, column=1)
+
+        label_end = Label(root, text="Stop:")
+        label_end.grid(row=2, column=0)
+        entry_end = Entry(root)
+        entry_end.insert(END, self.time[1])
+        entry_end.grid(row=2, column=1)
+
+        def load_file():
+            print("load")
+            root.filename = filedialog.askopenfilename(initialdir="/", title="Select file",
+                                                       filetypes=(("jpeg files", "*.jpg"), ("all files", "*.*")))
+            print(root.filename)
+
+        in_file = options.input.strip()
+
+        base_folder = os.path.dirname(options.input.strip())
+        default_folder = os.path.join(base_folder, "clips/")
+        print(default_folder)
+        if not os.path.exists(default_folder):
+            os.makedirs(default_folder)
+            print('create new folder: ' + default_folder)
+        label_output_folder = Label(root, text="Output Folder:")
+        label_output_folder.grid(row=3, column=0)
+        entry_output_folder = Entry(root)
+        entry_output_folder.insert(END, default_folder)
+        entry_output_folder.grid(row=3, column=1)
+        output_button = Button(root, text="Browse", command=load_file, width=10)
+        output_button.grid(row=3, column=2, sticky=W)
+
+        label_filename = Label(root, text="Name of File: ")
+        label_filename.grid(row=4, column=0)
+
+        entry_name = Entry(root)
+        entry_name.grid(row=5, column=1)
+        entry_name.focus()
+
+        def name_input(event):
+            out_file = os.path.join(default_folder, entry_name.get())
+            if not out_file.endswith(".mp4"):
+                out_file += ".mp4"
+            print('Create file: ' + out_file)
+            child = os.fork()
+            if child == 0:
+                ffmpeg_command = f" -i {in_file} -ss {self.time[0]} -to {self.time[1]} {out_file}"
+                print('run: ffmpeg' + "".join(ffmpeg_command))
+                os.system("ffmpeg " + ffmpeg_command)
+                exit(0)
+            self.time.clear()
+            root.destroy()
+
+        entry_name.bind('<Return>', name_input)
+        root.geometry('500x450')
+        root.mainloop()
 
 
 def send_to_server(message):
@@ -144,6 +146,12 @@ def to_bin(a_str):
     return a_str.encode('ascii')
 
 
+def connect_server(options):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind((HOST, PORT))
+    return s
+
+
 def main():
     if os.fork():
         sys.exit()
@@ -155,7 +163,9 @@ def main():
 
     (options, args) = parser.parse_args()
     try:
-        connect_server(options)
+        vfcut_socket = connect_server(options)
+        server = VFCutServer(vfcut_socket, options)
+        server.listen_connections()
     except:
         if options.time:
             send_to_server(to_bin("time " + options.time))
