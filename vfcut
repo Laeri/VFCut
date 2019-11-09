@@ -60,6 +60,10 @@ class VFCutServer:
                     print("vfcut: " + self.running[pid] + " finished!")
                     del self.running[pid]
                     os.waitpid(int(dt[1]))
+                elif dt[0] == "status":
+                    print("VFCUT Status:")
+                    for pid, name in self.running.items():
+                        print(f"running: [{pid}] {name}")
                 if len(self.time) >= 2:
                     self.open_confirm_window(self.options)
                 conn, addr = self.socket.accept()
@@ -154,8 +158,22 @@ class VFCutServer:
             self.time.clear()
             root.destroy()
 
+        row += 2
+
         create_button = Button(root, text="Create", command=create_cut, width=9, bg=button_color)
-        create_button.grid(row=row, column=2)
+        create_button.grid(row=row, column=1, pady=10)
+
+        row += 1
+
+        set_stop_again = Button(root, text="Reset Stop", command=on_closing, width=9, bg=button_color)
+        set_stop_again.grid(row=row, column=0, pady= 10)
+
+        row += 1
+
+        clear_button = Button(root, text="Clear All", command=on_closing, width=9, height=1, bg=button_color)
+        clear_button.grid(row=row, column=0, pady=10)
+
+
 
         row += 2
 
@@ -194,6 +212,7 @@ def main():
     parser.add_option("-t", "--time", dest="time", help="supply start or end time", metavar="TIME")
     parser.add_option("-i", "--input", dest="input", help="supply an input .mp4 file", metavar="INPUT")
     parser.add_option("-e", "--exit", "--quit", dest="quit", help="close server", metavar="QUIT")
+    parser.add_option("-s", "--status", dest="status", help="show status (running jobs)", metavar="STATUS")
 
     (options, args) = parser.parse_args()
     try:
@@ -209,6 +228,8 @@ def main():
             send_to_server(to_bin("output " + options.output))
         if options.quit:
             send_to_server(to_bin("quit " + options.quit))
+        if options.status:
+            send_to_server(to_bin("status"))
 
 
 if __name__ == "__main__":
