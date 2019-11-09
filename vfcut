@@ -32,12 +32,26 @@ class VFCutServer:
         self.out_file = None
         self.description = None
         self.running = {}
+        self.finished = []
         if options.time:
             self.time.append(options.time.strip())
         if options.input:
             self.in_file = options.input
         if options.output:
             self.out_file = options.output
+        if options.status:
+            self.print_status()
+
+
+    def print_status(self):
+        print("VFCUT Status:")
+        if not self.running:
+            print("No running jobs at the moment!")
+        for pid, name in self.running.items():
+            print(f"running: [{pid}] {name}")
+        for pid, name in self.finished:
+            print(f"finished: [{pid}] {name}")
+            self.finished.clear()
 
     def listen_connections(self):
         self.socket.listen()
@@ -50,7 +64,12 @@ class VFCutServer:
                 data_str = data.decode('ascii')
                 dt = data_str.split()
                 if dt[0] == "time":
-                    self.time.append(dt[1])
+                    if len(self.time) > 1:
+                        self.time[0] = dt[1]
+                    else:
+                        self.time.append(dt[1])
+                    if len(self.time) >= 2:
+                        self.open_confirm_window(self.options)
                 elif dt[0] == "output":
                     output = dt[1]
                 elif dt[0] == "quit":
@@ -58,14 +77,13 @@ class VFCutServer:
                 elif dt[0] == "finished":
                     pid = int(dt[1])
                     print("vfcut: " + self.running[pid] + " finished!")
+                    self.finished.append([pid, self.running[pid]])
                     del self.running[pid]
                     os.waitpid(int(dt[1]))
                 elif dt[0] == "status":
-                    print("VFCUT Status:")
-                    for pid, name in self.running.items():
-                        print(f"running: [{pid}] {name}")
-                if len(self.time) >= 2:
-                    self.open_confirm_window(self.options)
+                    self.print_status()
+                elif dt[0] == "quit":
+                    exit(0)
                 conn, addr = self.socket.accept()
 
     def open_confirm_window(self, options):
@@ -80,6 +98,7 @@ class VFCutServer:
         root.configure(bg=bg_color)
 
         def on_closing():
+            print('close')
             self.time.clear()
             root.destroy()
 
@@ -98,9 +117,18 @@ class VFCutServer:
 
         label_start = Label(root, text="Start:", bg=label_bg_color)
         label_start.grid(row=row, column=0)
+
+
         entry_start = Entry(root, bg=entry_bg_color)
         entry_start.insert(END, self.time[0])
         entry_start.grid(row=row, column=1)
+
+        def reset_start():
+            root.destroy()
+
+        set_start_again = Button(root, text="Reset Start", command=reset_start, width=9, bg=button_color)
+        set_start_again.grid(row=row, column=2)
+
 
         row += 1
         label_end = Label(root, text="Stop:", bg=label_bg_color)
@@ -108,6 +136,13 @@ class VFCutServer:
         entry_end = Entry(root, bg=entry_bg_color)
         entry_end.insert(END, self.time[1])
         entry_end.grid(row=row, column=1)
+
+        def reset_stop():
+            del self.time[1]
+            root.destroy()
+
+        set_stop_again = Button(root, text="Reset Stop", command=reset_stop, width=9, bg=button_color)
+        set_stop_again.grid(row=row, column=2)
 
         row += 1
         def load_file():
@@ -141,7 +176,7 @@ class VFCutServer:
         entry_name.grid(row=row, column=1)
         entry_name.focus()
 
-        def create_cut(event):
+        def create_cut():
             out_file = os.path.join(default_folder, entry_name.get())
             if not out_file.endswith(".mp4"):
                 out_file += ".mp4"
@@ -163,14 +198,10 @@ class VFCutServer:
         create_button = Button(root, text="Create", command=create_cut, width=9, bg=button_color)
         create_button.grid(row=row, column=1, pady=10)
 
-        row += 1
-
-        set_stop_again = Button(root, text="Reset Stop", command=on_closing, width=9, bg=button_color)
-        set_stop_again.grid(row=row, column=0, pady= 10)
 
         row += 1
 
-        clear_button = Button(root, text="Clear All", command=on_closing, width=9, height=1, bg=button_color)
+        clear_button = Button(root, text="Cancel", command=on_closing, width=9, height=1, bg=button_color)
         clear_button.grid(row=row, column=0, pady=10)
 
 
@@ -211,9 +242,8 @@ def main():
     parser.add_option("-o", dest="output", help="store clip in output file", metavar="FILE")
     parser.add_option("-t", "--time", dest="time", help="supply start or end time", metavar="TIME")
     parser.add_option("-i", "--input", dest="input", help="supply an input .mp4 file", metavar="INPUT")
-    parser.add_option("-e", "--exit", "--quit", dest="quit", help="close server", metavar="QUIT")
-    parser.add_option("-s", "--status", dest="status", help="show status (running jobs)", metavar="STATUS")
-
+    parser.add_option("-q", "--exit", "--quit", action="store_true", dest="quit", help="close server", metavar="QUIT")
+    parser.add_option("-s", "--status", action="store_true", dest="status", help="show status (running jobs)", metavar="STATUS")
     (options, args) = parser.parse_args()
     try:
         vfcut_socket = connect_server(options)
@@ -230,6 +260,8 @@ def main():
             send_to_server(to_bin("quit " + options.quit))
         if options.status:
             send_to_server(to_bin("status"))
+        if options.quit:
+            send_to_server(to_bin("quit"))
 
 
 if __name__ == "__main__":
