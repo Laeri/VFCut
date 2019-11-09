@@ -245,6 +245,17 @@ def main():
     parser.add_option("-q", "-e", "-k", "--exit", "--quit", action="store_true", dest="quit", help="close server", metavar="QUIT")
     parser.add_option("-s", "--status", action="store_true", dest="status", help="show status (running jobs)", metavar="STATUS")
     (options, args) = parser.parse_args()
+
+    if all(x is None for x in vars(options).values()):
+        print("Vfcut: No option specified.")
+        parser.print_help()
+        exit(1)
+
+    if (options.time and not options.input) or (options.input and not options.time):
+        print("VFCut: please supply an input filename and a time where you want to cut")
+        parser.print_help()
+        exit(1)
+
     try:
         vfcut_socket = connect_server(options)
         server = VFCutServer(vfcut_socket, options)
