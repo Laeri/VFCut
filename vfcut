@@ -4,10 +4,12 @@ import socket
 import tkinter
 import os
 from tkinter import *
-from optparse import OptionParser
+from argparse import ArgumentParser
 from tkinter import filedialog
+import pickle
 
 HOST = '127.0.0.1'
+# which port do we choose?
 PORT = 65442
 
 
@@ -22,25 +24,39 @@ PORT = 65442
 # 7. use ffmpeg to cut video (given by mpv)
 
 
+
+
 class VFCutServer:
 
-    def __init__(self, vfcut_socket, options):
+    def __init__(self, vfcut_socket, argv):
         self.socket = vfcut_socket
-        self.options = options
         self.time = []
         self.in_file = None
         self.out_file = None
         self.description = None
         self.running = {}
         self.finished = {}
-        if options.time:
-            self.time.append(options.time.strip())
-        if options.input:
-            self.in_file = options.input
-        if options.output:
-            self.out_file = options.output
-        if options.status:
+        self.parser = ArgumentParser()
+        self.parser.add_argument("-o", dest="output", help="store clip in output file")
+        self.parser.add_argument("-t", "--time", dest="time", help="supply start or end time")
+        self.parser.add_argument("-i", "--input", dest="input", help="supply an input .mp4 file")
+        self.parser.add_argument("-q", "-e", "-k", "--exit", "--quit", action="store_true", dest="quit", help="close server")
+        self.parser.add_argument("-s", "--status", action="store_true", dest="status", help="show status (running jobs)")
+
+        self.parser.add_argument("--finished", dest="finished") # used only from child processes
+        self.parser.add_argument("--monitor", dest="monitor")
+
+        args = self.parser.parse_args(argv)
+        self.args = args
+        if args.time:
+            self.time.append(args.time.strip())
+        if args.input:
+            self.in_file = args.input
+        if args.output:
+            self.out_file = args.output
+        if args.status:
             self.print_status()
+
 
     def print_status(self):
         print("VFCUT Status:")
@@ -57,32 +73,48 @@ class VFCutServer:
         conn, addr = self.socket.accept()
         with conn:
             while True:
+                self.print_status()
                 data = conn.recv(1024)
                 if not data:
                     break
-                data_str = data.decode('ascii')
-                dt = data_str.split()
-                if dt[0] == "time":
+                argv = pickle.loads(data)
+                args = self.parser.parse_args(argv)
+
+                if all(x is None for x in vars(args).values()):
+                    print("Vfcut: No option specified.")
+                    self.parser.print_help()
+                    exit(1)
+
+                if (args.time and not args.input) or (args.input and not args.time):
+                    print("VFCut: please supply an input filename and a time where you want to cut")
+                    self.parser.print_help()
+                    exit(1)
+
+                print(f"RECEIVED: {argv}")
+                if args.time:
                     if len(self.time) > 1:
-                        self.time[0] = dt[1]
+                        self.time[0] = args.time
                     else:
-                        self.time.append(dt[1])
+                        # only append when the stop time of the clip
+                        # differs from the start time
+                        # you can use the same shortcut to continue the clip after starting the cut
+                        if not self.time or (args.time != self.time[0]):
+                            self.time.append(args.time)
                     if len(self.time) >= 2:
                         self.open_confirm_window(self.options)
-                elif dt[0] == "output":
-                    output = dt[1]
-                elif dt[0] == "quit":
+                if args.output:
+                    output = args.output
+                if args.quit:
+                    print('server quit')
                     exit(0)
-                elif dt[0] == "finished":
-                    pid = int(dt[1])
+                if args.finished:
+                    pid = int(args.finished)
                     print("vfcut: " + self.running[pid] + " finished!")
                     self.finished[pid] = self.running[pid]
                     del self.running[pid]
-                    os.waitpid(int(dt[1]))
-                elif dt[0] == "status":
+                    os.waitpid(pid)
+                if args.status:
                     self.print_status()
-                elif dt[0] == "quit":
-                    exit(0)
                 conn, addr = self.socket.accept()
 
     def open_confirm_window(self, options):
@@ -179,9 +211,10 @@ class VFCutServer:
             child = os.fork()
             if child == 0:
                 ffmpeg_command = f" -i {in_file} -ss {self.time[0]} -to {self.time[1]} {out_file}"
-                #print('run: ffmpeg' + "".join(ffmpeg_command))
+                # print('run: ffmpeg' + "".join(ffmpeg_command))
                 os.system("ffmpeg " + ffmpeg_command)
-                send_to_server(to_bin("finished " + str(os.getpid())))
+                argv = ['--finished', str(os.getpid())]
+                send_to_server(argv)
                 exit(0)
             else:
                 self.running[child] = out_file
@@ -211,58 +244,33 @@ class VFCutServer:
 def send_to_server(message):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect((HOST, PORT))
-        s.sendall(message)
+        s.sendall(pickle.dumps(message))
 
 
-def to_bin(a_str):
-    return a_str.encode('ascii')
-
-
-def connect_server(options):
+def connect_server():
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.bind((HOST, PORT))
     return s
 
 
 def main():
-    if os.fork():
-        sys.exit()
-    parser = OptionParser()
-    parser.add_option("-o", dest="output", help="store clip in output file", metavar="FILE")
-    parser.add_option("-t", "--time", dest="time", help="supply start or end time", metavar="TIME")
-    parser.add_option("-i", "--input", dest="input", help="supply an input .mp4 file", metavar="INPUT")
-    parser.add_option("-q", "-e", "-k", "--exit", "--quit", action="store_true", dest="quit", help="close server",
-                      metavar="QUIT")
-    parser.add_option("-s", "--status", action="store_true", dest="status", help="show status (running jobs)",
-                      metavar="STATUS")
-    (options, args) = parser.parse_args()
+    # temporary turn off forking, so we can debug the application better
+    #if os.fork():
+    #    sys.exit()
 
-    if all(x is None for x in vars(options).values()):
-        print("Vfcut: No option specified.")
-        parser.print_help()
-        exit(1)
+    args = sys.argv[1:]
 
-    if (options.time and not options.input) or (options.input and not options.time):
-        print("VFCut: please supply an input filename and a time where you want to cut")
-        parser.print_help()
-        exit(1)
-
+    # we are the first process (server
     try:
-        vfcut_socket = connect_server(options)
-        server = VFCutServer(vfcut_socket, options)
-        server.listen_connections()
+        vfcut_socket = connect_server()
+    # there is already a server, so we relay arguments to it
     except:
-        if options.time:
-            send_to_server(to_bin("time " + options.time))
-        if options.input:
-            send_to_server(to_bin("input " + options.input))
-        if options.output:
-            send_to_server(to_bin("output " + options.output))
-        if options.quit:
-            send_to_server(to_bin("quit " + options.quit))
-        if options.status:
-            send_to_server(to_bin("status"))
+        send_to_server(args)
+        print('send to server finished, exiting!')
+        exit(0)
 
+    server = VFCutServer(vfcut_socket, args)
+    server.listen_connections()
 
 if __name__ == "__main__":
     main()
