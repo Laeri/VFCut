@@ -3,10 +3,12 @@
 import socket
 import tkinter
 import os
+import types
 from tkinter import *
 from argparse import ArgumentParser
 from tkinter import filedialog
 import pickle
+import selectors
 
 HOST = '127.0.0.1'
 # which port do we choose?
@@ -24,11 +26,9 @@ PORT = 65442
 # 7. use ffmpeg to cut video (given by mpv)
 
 
-
-
 class VFCutServer:
 
-    def __init__(self, vfcut_socket, argv):
+    def __init__(self, vfcut_socket, selector, argv):
         self.socket = vfcut_socket
         self.time = []
         self.in_file = None
@@ -40,10 +40,12 @@ class VFCutServer:
         self.parser.add_argument("-o", dest="output", help="store clip in output file")
         self.parser.add_argument("-t", "--time", dest="time", help="supply start or end time")
         self.parser.add_argument("-i", "--input", dest="input", help="supply an input .mp4 file")
-        self.parser.add_argument("-q", "-e", "-k", "--exit", "--quit", action="store_true", dest="quit", help="close server")
-        self.parser.add_argument("-s", "--status", action="store_true", dest="status", help="show status (running jobs)")
+        self.parser.add_argument("-q", "-e", "-k", "--exit", "--quit", action="store_true", dest="quit",
+                                 help="close server")
+        self.parser.add_argument("-s", "--status", action="store_true", dest="status",
+                                 help="show status (running jobs)")
 
-        self.parser.add_argument("--finished", dest="finished") # used only from child processes
+        self.parser.add_argument("--finished", dest="finished")  # used only from child processes
         self.parser.add_argument("--monitor", dest="monitor")
 
         args = self.parser.parse_args(argv)
@@ -57,6 +59,7 @@ class VFCutServer:
         if args.status:
             self.print_status()
 
+        self.selector = selector
 
     def print_status(self):
         print("VFCUT Status:")
@@ -68,54 +71,83 @@ class VFCutServer:
             print(f"finished: [{pid}] {name}")
             self.finished.clear()
 
+    def accept_wrapper(self,sock):
+        conn, addr = sock.accept()  # Should be ready to read
+        print("accepted connection from", addr)
+        conn.setblocking(False)
+        data = types.SimpleNamespace(addr=addr, inb=b"", outb=b"")
+        events = selectors.EVENT_READ | selectors.EVENT_WRITE
+        self.selector.register(conn, events, data=data)
+
+    def service_connection(self, key, mask):
+        sock = key.fileobj
+        data = key.data
+        if mask & selectors.EVENT_READ:
+            recv_data = sock.recv(1024)  # Should be ready to read
+            if recv_data:
+                print('receive: ' + repr(recv_data))
+                #data.outb += recv_data
+            else:
+                print("closing connection to", data.addr)
+                self.selector.unregister(sock)
+                sock.close()
+        if mask & selectors.EVENT_WRITE:
+            if data.outb:
+                print("echoing", repr(data.outb), "to", data.addr)
+                sent = sock.send(data.outb)  # Should be ready to write
+                data.outb = data.outb[sent:]
+
     def listen_connections(self):
-        self.socket.listen()
-        conn, addr = self.socket.accept()
-        with conn:
-            while True:
-                self.print_status()
-                data = conn.recv(1024)
-                if not data:
-                    break
-                argv = pickle.loads(data)
-                args = self.parser.parse_args(argv)
+        while True:
+            events = self.selector.select(timeout=None)
+            for key, mask in events:
+                if key.data is None:  # it is from the listening socket
+                    self.accept_wrapper(key.fileobj)
+                else:
+                    self.service_connection(key, mask)
 
-                if all(x is None for x in vars(args).values()):
-                    print("Vfcut: No option specified.")
-                    self.parser.print_help()
-                    exit(1)
+            tmp = """self.print_status()
+            data = conn.recv(1024)
+            if not data:
+                break
+            argv = pickle.loads(data)
+            args = self.parser.parse_args(argv)
 
-                if (args.time and not args.input) or (args.input and not args.time):
-                    print("VFCut: please supply an input filename and a time where you want to cut")
-                    self.parser.print_help()
-                    exit(1)
+            if all(x is None for x in vars(args).values()):
+                print("Vfcut: No option specified.")
+                self.parser.print_help()
+                exit(1)
 
-                print(f"RECEIVED: {argv}")
-                if args.time:
-                    if len(self.time) > 1:
-                        self.time[0] = args.time
-                    else:
-                        # only append when the stop time of the clip
-                        # differs from the start time
-                        # you can use the same shortcut to continue the clip after starting the cut
-                        if not self.time or (args.time != self.time[0]):
-                            self.time.append(args.time)
-                    if len(self.time) >= 2:
-                        self.open_confirm_window(self.options)
-                if args.output:
-                    output = args.output
-                if args.quit:
-                    print('server quit')
-                    exit(0)
-                if args.finished:
-                    pid = int(args.finished)
-                    print("vfcut: " + self.running[pid] + " finished!")
-                    self.finished[pid] = self.running[pid]
-                    del self.running[pid]
-                    os.waitpid(pid)
-                if args.status:
-                    self.print_status()
-                conn, addr = self.socket.accept()
+            if (args.time and not args.input) or (args.input and not args.time):
+                print("VFCut: please supply an input filename and a time where you want to cut")
+                self.parser.print_help()
+                exit(1)
+
+            print(f"RECEIVED: {argv}")
+            if args.time:
+                if len(self.time) > 1:
+                    self.time[0] = args.time
+                else:
+                    # only append when the stop time of the clip
+                    # differs from the start time
+                    # you can use the same shortcut to continue the clip after starting the cut
+                    if not self.time or (args.time != self.time[0]):
+                        self.time.append(args.time)
+                if len(self.time) >= 2:
+                    self.open_confirm_window(self.options)
+            if args.output:
+                output = args.output
+            if args.quit:
+                print('server quit')
+                exit(0)
+            if args.finished:
+                pid = int(args.finished)
+                print("vfcut: " + self.running[pid] + " finished!")
+                self.finished[pid] = self.running[pid]
+                del self.running[pid]
+                os.waitpid(pid)
+            if args.status:
+                self.print_status()"""
 
     def open_confirm_window(self, options):
         root = tkinter.Tk()
@@ -214,7 +246,7 @@ class VFCutServer:
                 # print('run: ffmpeg' + "".join(ffmpeg_command))
                 os.system("ffmpeg " + ffmpeg_command)
                 argv = ['--finished', str(os.getpid())]
-                send_to_server(argv)
+                #send_to_server(argv)
                 exit(0)
             else:
                 self.running[child] = out_file
@@ -241,36 +273,94 @@ class VFCutServer:
         root.mainloop()
 
 
-def send_to_server(message):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.connect((HOST, PORT))
-        s.sendall(pickle.dumps(message))
+class VFCutClient:
+    def __init__(self):
+        self.selector = selectors.DefaultSelector()
+        self.messages = [b'MESSage1', b'message 2', b'message3']
 
+    def run_eventloop(self):
+        while True:
+            events = self.selector.select(timeout=1)
+            if events:
+                for key, mask in events:
+                    self.service_connection(key, mask)
+            if not self.selector.get_map():
+                break
+    # CLIENT
+    def service_connection(self, key, mask):
+        sock = key.fileobj
+        data = key.data
+        if mask & selectors.EVENT_READ:
+            recv_data = sock.recv(1024)  # Should be ready to read
+            if recv_data:
+                print("received", repr(recv_data), "from connection", data.connid)
+                data.recv_total += len(recv_data)
+            if not recv_data or data.recv_total == data.msg_total:
+                print("closing connection", data.connid)
+                self.selector.unregister(sock)
+                sock.close()
+        if mask & selectors.EVENT_WRITE:
+            if not data.outb and data.messages:
+                data.outb = data.messages.pop(0)
+            if data.outb:
+                print("sending", repr(data.outb), "to connection", data.connid)
+                sent = sock.send(data.outb)  # Should be ready to write
+                data.outb = data.outb[sent:]
 
-def connect_server():
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind((HOST, PORT))
-    return s
-
+    # CLIENT
+    def start_connections(self, host, port, num_conns):
+        server_addr = (host, port)
+        for i in range(0, num_conns):
+            connid = i + 1
+            print("starting connection", connid, "to", server_addr)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setblocking(False)
+            sock.connect_ex(server_addr)
+            events = selectors.EVENT_READ | selectors.EVENT_WRITE
+            data = types.SimpleNamespace(
+                connid=connid,
+                msg_total=sum(len(m) for m in self.messages),
+                recv_total=0,
+                messages=list(self.messages),
+                outb=b"",
+            )
+            self.selector.register(sock, events, data=data)
+# SERVER
+def setup_server_socket():
+    selector = selectors.DefaultSelector()
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)  # AF_INET --> internet family ipv4, SOCK_STREAM --> TCP
+    sock.bind((HOST, PORT))
+    sock.listen()
+    print('listening on', (HOST, PORT))
+    sock.setblocking(False)
+    selector.register(sock, selectors.EVENT_READ, data=None)
+    return sock, selector
 
 def main():
     # temporary turn off forking, so we can debug the application better
-    #if os.fork():
+    # if os.fork():
     #    sys.exit()
-
+    import time
     args = sys.argv[1:]
 
     # we are the first process (server
     try:
-        vfcut_socket = connect_server()
-    # there is already a server, so we relay arguments to it
+        vfcut_socket, selector = setup_server_socket()
+        print('SERV')
     except:
-        send_to_server(args)
+        # there is already a server, so we relay arguments to it
+        print("CLIENT")
+        client = VFCutClient()
+        client.start_connections(HOST, PORT, 1)
+        client.run_eventloop()
+
+        # send_to_server(args)
         print('send to server finished, exiting!')
         exit(0)
 
-    server = VFCutServer(vfcut_socket, args)
+    server = VFCutServer(vfcut_socket, selector, args)
     server.listen_connections()
+
 
 if __name__ == "__main__":
     main()
