@@ -9,31 +9,22 @@ from argparse import ArgumentParser
 from tkinter import filedialog
 import pickle
 import selectors
+import threading
 
 HOST = '127.0.0.1'
-# which port do we choose?
+# which port?
 PORT = 65442
-
-
-# 1. supply begin time
-# vfcut -t 00:00:00 -i somefile.mp4
-# 2. supply end time
-# vfcut -t 00:01:40 -i somefile.mp4
-# 3. open tkinter window
-# 4. type in filename
-# 5. type in description
-# 6. press enter to save or type in metadata
-# 7. use ffmpeg to cut video (given by mpv)
 
 
 class VFCutServer:
 
     def __init__(self, vfcut_socket, selector, argv):
         self.socket = vfcut_socket
-        self.time = []
+        self.cutrange = []
         self.in_file = None
         self.out_file = None
         self.description = None
+        self.threads = []
         self.running = {}
         self.finished = {}
         self.parser = ArgumentParser()
@@ -44,33 +35,35 @@ class VFCutServer:
                                  help="close server")
         self.parser.add_argument("-s", "--status", action="store_true", dest="status",
                                  help="show status (running jobs)")
+        self.parser.add_argument("--mpv-working-dir", dest="mpv_working_dir")
 
         self.parser.add_argument("--finished", dest="finished")  # used only from child processes
         self.parser.add_argument("--monitor", action="store_true", dest="monitor")
         self.monitor = []
 
-        args = self.parser.parse_args(argv)
-        self.args = args
-        if args.time:
-            self.time.append(args.time.strip())
-        if args.input:
-            self.in_file = args.input
-        if args.output:
-            self.out_file = args.output
-        if args.status:
-            self.print_status()
-
+        self.mpv_working_dir = ""
         self.selector = selector
+        self.base_folder = None
+        #self.base_folder_selected = False
+        self.default_folder = None
+
+        self.handle_arguments(argv)
 
     def print_status(self):
         print("VFCUT Status:")
         if not self.running:
             print("No running jobs at the moment!")
-        for pid, name in self.running.items():
-            print(f"running: [{pid}] {name}")
-        for pid, name in self.finished.items():
-            print(f"finished: [{pid}] {name}")
-            self.finished.clear()
+        if not self.running:
+            print("FINISHED")
+        else:
+            print("RUNNING JOBS:")
+            for t, name in self.running.items():
+                print(f"running: [{t}] {name}")
+        if self.finished:
+            print("FINISHED JOBS:")
+            for t, name in self.finished.items():
+                print(f"finished: [{t}] {name}")
+                self.finished.clear()
 
     def accept_wrapper(self, sock):
         conn, addr = sock.accept()  # Should be ready to read
@@ -81,44 +74,75 @@ class VFCutServer:
         self.selector.register(conn, events, data=data)
 
     def handle_arguments(self, argv):
-        args = self.parser.parse_args(argv)
+        print("ARGV")
+        print(argv)
+        try:
+            args = self.parser.parse_args(argv)
+        except Exception as ex:
+            print(ex)
+            return
+        print("ARGS")
         print(args)
         if all(x is None for x in vars(args).values()):
             print("Vfcut: No option specified.")
-            self.parser.print_help()
-            exit(1)
+            # self.parser.print_help()
+            # exit(1)
+            # RETURN ERROR MESSAGE OR COMMAND TO PRINT ERROR
 
         if (args.time and not args.input) or (args.input and not args.time):
             print("VFCut: please supply an input filename and a time where you want to cut")
-            self.parser.print_help()
-            exit(1)
+            # self.parser.print_help()
+            # exit(1)
+            # RETURN ERROR MESSAGE OR COMMAND TO PRINT ERROR
 
-        print(f"RECEIVED: {argv}")
+        print(args.mpv_working_dir)
+
+        print(args.input)
+
+        if args.mpv_working_dir:
+            print('mpv_working_dir passed')
+            self.mpv_working_dir = args.mpv_working_dir
+
+        if args.output:
+            filename = args.output
+            if not os.path.isabs(filename):
+                filename = os.path.join(self.mpv_working_dir, filename)
+            print(f"#OUT#{filename}#")
+            self.out_file = os.path.realpath(filename)
+        if args.input:
+            filename = args.input
+            if not os.path.isabs(filename):
+                filename = os.path.join(self.mpv_working_dir, filename)
+            print(f"#IN#{filename}#")
+            self.in_file = os.path.realpath(filename)
+        if args.quit:
+            print('server quit')
+            exit(0)
+
+        if args.status:
+            for t in self.threads:
+                print(t.is_alive())
+                if not t.is_alive():
+                    self.finished[t] = t
+                    t.join()
+                    print('joined')
+                    del self.running[t]
+            self.print_status()
+
         if args.time:
-            if len(self.time) >= 2:
-                self.time[0] = args.time
+            if len(self.cutrange) >= 2:
+                self.cutrange[0] = args.time
             else:
                 # only append when the stop time of the clip
                 # differs from the start time
                 # you can use the same shortcut to continue the clip after starting the cut
                 # if not self.time or (args.time != self.time[0]):
-                self.time.append(args.time)
-            if len(self.time) >= 2:
-                print('open confirm window')
-                self.open_confirm_window(args)
-        if args.output:
-            self.out_file = args.output
-        if args.quit:
-            print('server quit')
-            exit(0)
-        if args.finished:
-            pid = int(args.finished)
-            print("vfcut: " + self.running[pid] + " finished!")
-            self.finished[pid] = self.running[pid]
-            del self.running[pid]
-            os.waitpid(pid)
-        if args.status:
-            self.print_status()
+                self.cutrange.append(args.time)
+
+        # OPEN GUI IF NECESSARY
+        if len(self.cutrange) >= 2:
+            print('open confirm window')
+            self.open_confirm_window(args)
 
     def service_connection(self, key, mask):
         sock = key.fileobj
@@ -161,7 +185,7 @@ class VFCutServer:
         root.configure(bg=bg_color)
 
         def on_closing():
-            self.time.clear()
+            self.cutrange.clear()
             root.destroy()
 
         root.protocol("WM_DELETE_WINDOW", on_closing)
@@ -177,11 +201,19 @@ class VFCutServer:
         title.grid(row=row, column=0, pady=20, padx=padx)
         row += 1
 
+        max_label_len = 40
+        filename_label_text = self.in_file
+        if len(self.in_file) > max_label_len:
+            filename_label_text = "...'"+self.in_file[len(self.in_file) - max_label_len:] + "'"
+        label_filename = Label(root, text=f"File/Url: {filename_label_text}", bg=label_bg_color)
+        label_filename.grid(row=row, column=0, columnspan=5)
+        row += 1
+
         label_start = Label(root, text="Start:", bg=label_bg_color)
         label_start.grid(row=row, column=0)
 
         entry_start = Entry(root, bg=entry_bg_color)
-        entry_start.insert(END, self.time[0])
+        entry_start.insert(END, self.cutrange[0])
         entry_start.grid(row=row, column=1)
 
         def reset_start():
@@ -194,11 +226,11 @@ class VFCutServer:
         label_end = Label(root, text="Stop:", bg=label_bg_color)
         label_end.grid(row=row, column=0)
         entry_end = Entry(root, bg=entry_bg_color)
-        entry_end.insert(END, self.time[1])
+        entry_end.insert(END, self.cutrange[1])
         entry_end.grid(row=row, column=1)
 
         def reset_stop():
-            del self.time[1]
+            del self.cutrange[1]
             root.destroy()
 
         set_stop_again = Button(root, text="Reset Stop", command=reset_stop, width=9, bg=button_color)
@@ -211,18 +243,18 @@ class VFCutServer:
                                                        filetypes=(("jpeg files", "*.jpg"), ("all files", "*.*")))
             print(root.filename)
 
-        in_file = args.input.strip().replace(' ', '\ ')
+        # how to handle base and default folder if we use a new filename
+        # and if we change the base folder / default folder with the gui?
+        self.base_folder = os.path.dirname(self.in_file)
+        self.default_folder = os.path.join(self.base_folder, "clips/")
 
-        base_folder = os.path.dirname(args.input.strip())
-        default_folder = os.path.join(base_folder, "clips/")
-
-        if not os.path.exists(default_folder):
-            os.makedirs(default_folder)
+        if not os.path.exists(self.default_folder):
+            os.makedirs(self.default_folder)
 
         label_output_folder = Label(root, text="Output Folder:", bg=label_bg_color)
         label_output_folder.grid(row=row, column=0)
         entry_output_folder = Entry(root, bg=entry_bg_color)
-        entry_output_folder.insert(END, default_folder)
+        entry_output_folder.insert(END, self.default_folder)
         entry_output_folder.grid(row=row, column=1, padx=10)
         output_button = Button(root, text="Browse", command=load_file, width=9, bg=button_color)
         output_button.grid(row=row, column=2, sticky=W)
@@ -236,21 +268,20 @@ class VFCutServer:
         entry_name.focus()
 
         def create_cut(event=None):
-            out_file = os.path.join(default_folder, entry_name.get())
+            out_file = os.path.join(self.default_folder, entry_name.get())
             if not out_file.endswith(".mp4"):
                 out_file += ".mp4"
 
-            child = os.fork()
-            if child == 0:
-                ffmpeg_command = f" -i {in_file} -ss {self.time[0]} -to {self.time[1]} {out_file}"
-                # print('run: ffmpeg' + "".join(ffmpeg_command))
-                os.system("ffmpeg " + ffmpeg_command)
-                argv = ['--finished', str(os.getpid())]
-                # send_to_server(argv)
-                exit(0)
-            else:
-                self.running[child] = out_file
-            self.time.clear()
+            def ffmpeg_worker(ffmpeg_command):
+                os.system("ffmpeg" + ffmpeg_command)
+            # file name needs to be in quotes, otherwise a name with spaces is
+            # seen as separate commands / filenames
+            ffmpeg_command = f" -i '{self.in_file}' -ss {self.cutrange[0]} -to {self.cutrange[1]} '{out_file}'"
+            t = threading.Thread(target=ffmpeg_worker, args=(ffmpeg_command,))
+            self.threads.append(t)
+            t.start()
+            self.running[t] = out_file
+            self.cutrange.clear()
             root.destroy()
 
         row += 2
@@ -346,17 +377,18 @@ def main():
     #    sys.exit()
     import time
     argv = sys.argv[1:]
-
     # we are the first process (server
     try:
         vfcut_socket, selector = setup_server_socket()
-    except:
+    except Exception as toplevelex:
+        print(toplevelex)
         # there is already a server, so we relay arguments to it
         client = VFCutClient(argv)
         client_sock = client.connect_to_server(HOST, PORT)
         try:
             client.run_eventloop()
-        except:
+        except Exception as ex:
+            print(ex)
             client_sock.close()
             exit(1)
         finally:
@@ -365,8 +397,11 @@ def main():
     try:
         server = VFCutServer(vfcut_socket, selector, argv)
         server.listen_connections()
-    except:
+    except Exception as ex:
+        print(ex)
+    finally:
         vfcut_socket.close()
+
 
 if __name__ == "__main__":
     main()
