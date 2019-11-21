@@ -10,44 +10,154 @@ from tkinter import filedialog
 import pickle
 import selectors
 import threading
+import tempfile
+import subprocess
 
 HOST = '127.0.0.1'
 # which port?
 PORT = 65442
 
 
-class VFCutServer:
+def is_url(a_str):
+    return a_str.startswith('http')
 
-    def __init__(self, vfcut_socket, selector, argv):
-        self.socket = vfcut_socket
-        self.cutrange = []
-        self.in_file = None
-        self.out_file = None
-        self.description = None
+
+def get_parser():
+    parser = ArgumentParser()
+    parser.add_argument("-o", dest="output", help="store clip in output file")
+    parser.add_argument("-t", "--time", dest="time", help="supply start or end time")
+    parser.add_argument("-i", "--input", dest="input", help="supply an input .mp4 file")
+    parser.add_argument("-q", "-e", "-k", "--exit", "--quit", action="store_true", dest="quit",
+                        help="close server")
+    parser.add_argument("-s", "--status", action="store_true", dest="status",
+                        help="show status (running jobs)")
+    parser.add_argument("--mpv-working-dir", dest="mpv_working_dir")
+
+    parser.add_argument("--finished", dest="finished")  # used only from child processes
+    parser.add_argument("--monitor", action="store_true", dest="monitor")
+    return parser
+
+
+class Cut:
+
+    def get_in_file_path(self):
+        if os.path.isabs(self.in_filename):
+            return self.in_filename
+        else:
+            if self.working_dir:
+                path = os.path.join(self.working_dir, self.in_filename)
+                assert(os.path.exists(path))
+                return path
+            else:
+                raise Exception(f"the file {self.in_filename} does not exist, and there is no working directory specified")
+
+    def get_out_file_path(self):
+        if not self.out_file_path:
+            self.out_file_path = os.path.join(self.base_folder, self.out_filename)
+
+        if not self.out_file_path.endswith(".mp4"):
+            self.out_file_path += ".mp4"
+        return self.out_file_path
+
+    def __init__(self, in_filename=None, cut_range=[], out_filename=None, working_dir=None, output_folder=None):
+        assert(os.path.exists(working_dir))
+
+        self.in_filename = in_filename
+        self.cut_range = cut_range
+        self.out_filename = out_filename
+        self.working_dir = working_dir
+        self.reset_start = False
+        self.reset_end = False
+        self.output_folder = output_folder
+        self.out_file_path = None
+
+        # how to handle base and default folder if we use a new filename
+        # and if we change the base folder / default folder with the gui?
+        self.base_folder = os.path.dirname(self.in_file)
+        self.default_folder = os.path.join(self.base_folder, "clips/")
+
+        if not os.path.exists(self.default_folder):
+            os.makedirs(self.default_folder)
+
+    def set_begin(self, begin_time_str):
+        if len(self.cut_range) == 0:
+            self.cut_range.append(begin_time_str)
+        else:
+            self.cut_range[0] = begin_time_str
+
+    def set_end(self, end_time_str):
+        if len(self.cut_range) < 2:
+            self.cut_range.append(end_time_str)
+        else:
+            self.cut_range[1] = end_time_str
+
+    def add_time(self, time_str):
+        self.cut_range.append(time_str)
+
+    def clear_time(self):
+        self.cut_range.clear()
+
+    def create_thread(self):
+        def ffmpeg_worker(ffmpeg_command):
+            os.system("ffmpeg" + ffmpeg_command)
+
+        # file name needs to be in quotes, otherwise a name with spaces is
+        # seen as separate commands / filenames
+        ffmpeg_command = f" -i '{self.in_filename}' -ss {self.cut_range[0]} -to {self.cut_range[1]} '{self.out_filename}'"
+        t = threading.Thread(target=ffmpeg_worker, args=(ffmpeg_command,))
+        return t
+
+
+class VidCutter:
+
+    def __init__(self):
         self.threads = []
         self.running = {}
         self.finished = {}
-        self.parser = ArgumentParser()
-        self.parser.add_argument("-o", dest="output", help="store clip in output file")
-        self.parser.add_argument("-t", "--time", dest="time", help="supply start or end time")
-        self.parser.add_argument("-i", "--input", dest="input", help="supply an input .mp4 file")
-        self.parser.add_argument("-q", "-e", "-k", "--exit", "--quit", action="store_true", dest="quit",
-                                 help="close server")
-        self.parser.add_argument("-s", "--status", action="store_true", dest="status",
-                                 help="show status (running jobs)")
-        self.parser.add_argument("--mpv-working-dir", dest="mpv_working_dir")
+        self.cuts = []
+        self.threads = []
 
-        self.parser.add_argument("--finished", dest="finished")  # used only from child processes
-        self.parser.add_argument("--monitor", action="store_true", dest="monitor")
-        self.monitor = []
+    def dl_from_youtube(self, url, out_name):
+        tmp_file = tempfile.NamedTemporaryFile()
 
-        self.mpv_working_dir = ""
-        self.selector = selector
-        self.base_folder = None
-        #self.base_folder_selected = False
-        self.default_folder = None
+        check_download_finished = threading.Condition()
 
-        self.handle_arguments(argv)
+        def download_vid(url, out_name):
+            check_download_finished.acquire()
+            subprocess.run(['youtube-dl', f"{url} -o {out_name}"])
+            check_download_finished.release()
+
+        download_vid_thread = threading.Thread(target=download_vid, args=(url, tmp_file.name))
+        download_vid_thread.start()
+
+    def cut_youtubedl(self, in_filename_or_url, out_filename, base_folder, cut_range):
+        if is_url(in_filename_or_url):
+            # video is already downloaded
+            if self.url_to_vid[self.url]:
+                in_file = self.url_to_vid[self.url]
+            else:
+                # download it first
+                temp_file = tempfile.NamedTemporaryFile()
+
+                def dl_youtube(url, filename):
+                    subprocess.call(["youtube-dl", f"{self.url} -o {temp_file.name}"])
+
+                os.system(f"youtube-dl {self.url} -o {temp_file.name}")
+                in_file = temp_file.name
+                self.url_to_vid
+        else:
+            cut = Cut(in_filename_or_url=in_filename_or_url, cut_range=self.cut_range.copy(), out_filename=out_filename)
+            t = cut.create_thread()
+            self.threads.append(t)
+            t.start()
+            self.running[t] = out_filename
+
+    def add_cut(self, cut):
+        cut = Cut()
+        t = cut.create_thread()
+        self.threads.append(t)
+        # insert some condition inside the thread, so it only can start when the video is finished downloading
+        t.start()
 
     def print_status(self):
         print("VFCUT Status:")
@@ -65,6 +175,33 @@ class VFCutServer:
                 print(f"finished: [{t}] {name}")
                 self.finished.clear()
 
+
+class VFCutServer:
+
+    def __init__(self, vfcut_socket, selector, argv):
+        self.socket = vfcut_socket
+        self.cut_range = []
+        self.in_file = None
+        self.out_file = None
+        self.description = None
+        self.parser = get_parser()
+        self.vid_cutter = VidCutter()
+
+        self.monitor = []
+
+        self.selector = selector
+        self.default_folder = '/clips'
+
+        self.current_cut = Cut()
+
+        self.handle_arguments(argv)
+
+    def print_status(self):
+        self.vid_cutter.print_status()
+
+    def log(self, key, value):
+        print(f"{key} : {value}")
+
     def accept_wrapper(self, sock):
         conn, addr = sock.accept()  # Should be ready to read
         print("accepted connection from", addr)
@@ -74,15 +211,15 @@ class VFCutServer:
         self.selector.register(conn, events, data=data)
 
     def handle_arguments(self, argv):
-        print("ARGV")
-        print(argv)
+        self.log('argv', argv)
         try:
             args = self.parser.parse_args(argv)
         except Exception as ex:
             print(ex)
             return
-        print("ARGS")
-        print(args)
+
+        self.log('args_parsed', args)
+
         if all(x is None for x in vars(args).values()):
             print("Vfcut: No option specified.")
             # self.parser.print_help()
@@ -95,28 +232,29 @@ class VFCutServer:
             # exit(1)
             # RETURN ERROR MESSAGE OR COMMAND TO PRINT ERROR
 
-        print(args.mpv_working_dir)
-
-        print(args.input)
+        # ! the order of the parameter handling matters
+        # if a new filename appears and the current cut was set to a different filename
+        # we need to replace the current cut
+        # this happens if you start mpv and start cutting one video
+        # then you open a new video and want to cut again, VFCut will have stored the begin time
+        # for the old video, in this case recreate a Cut object and start from the beginning
+        if args.input:
+            # start a new cut
+            if self.current_cut.in_filename and args.input != self.current_cut.in_filename:
+                self.current_cut = Cut()
+            self.current_cut.in_filename = args.input
 
         if args.mpv_working_dir:
-            print('mpv_working_dir passed')
+            self.log('mpv_working_dir', args.mpv_working_dir)
             self.mpv_working_dir = args.mpv_working_dir
+            self.current_cut.working_dir = args.mpv_working_dir
 
+        # this option is usually only called if we use VFCut solely from the cli
+        # otherwise the out_filename should be set by the GUI
         if args.output:
-            filename = args.output
-            if not os.path.isabs(filename):
-                filename = os.path.join(self.mpv_working_dir, filename)
-            print(f"#OUT#{filename}#")
-            self.out_file = os.path.realpath(filename)
-        if args.input:
-            filename = args.input
-            if not os.path.isabs(filename):
-                filename = os.path.join(self.mpv_working_dir, filename)
-            print(f"#IN#{filename}#")
-            self.in_file = os.path.realpath(filename)
+            self.current_cut.out_filename = args.output
+
         if args.quit:
-            print('server quit')
             exit(0)
 
         if args.status:
@@ -125,23 +263,21 @@ class VFCutServer:
                 if not t.is_alive():
                     self.finished[t] = t
                     t.join()
-                    print('joined')
                     del self.running[t]
             self.print_status()
 
         if args.time:
-            if len(self.cutrange) >= 2:
-                self.cutrange[0] = args.time
+            if self.current_cut.reset_start:
+                self.current_cut.set_begin(args.time)
+                self.current_cut.reset_start = False
+            elif self.current_cut.reset_end:
+                self.current_cut.set_end(args.time)
+                self.current_cut.reset_end = False
             else:
-                # only append when the stop time of the clip
-                # differs from the start time
-                # you can use the same shortcut to continue the clip after starting the cut
-                # if not self.time or (args.time != self.time[0]):
-                self.cutrange.append(args.time)
+                self.current_cut.add_time(args.time)
 
         # OPEN GUI IF NECESSARY
-        if len(self.cutrange) >= 2:
-            print('open confirm window')
+        if len(self.cut_range) >= 2:
             self.open_confirm_window(args)
 
     def service_connection(self, key, mask):
@@ -185,7 +321,7 @@ class VFCutServer:
         root.configure(bg=bg_color)
 
         def on_closing():
-            self.cutrange.clear()
+            self.current_cut.clear_time()
             root.destroy()
 
         root.protocol("WM_DELETE_WINDOW", on_closing)
@@ -202,9 +338,9 @@ class VFCutServer:
         row += 1
 
         max_label_len = 40
-        filename_label_text = self.in_file
-        if len(self.in_file) > max_label_len:
-            filename_label_text = "...'"+self.in_file[len(self.in_file) - max_label_len:] + "'"
+        filename_label_text = self.current_cut.get_in_file_path()
+        if len(self.current_cut.in_filename) > max_label_len:
+            filename_label_text = "...'" + filename_label_text[len(filename_label_text) - max_label_len:] + "'"
         label_filename = Label(root, text=f"File/Url: {filename_label_text}", bg=label_bg_color)
         label_filename.grid(row=row, column=0, columnspan=5)
         row += 1
@@ -213,10 +349,11 @@ class VFCutServer:
         label_start.grid(row=row, column=0)
 
         entry_start = Entry(root, bg=entry_bg_color)
-        entry_start.insert(END, self.cutrange[0])
+        entry_start.insert(END, self.cut_range[0])
         entry_start.grid(row=row, column=1)
 
         def reset_start():
+            self.current_cut.reset_start = True
             root.destroy()
 
         set_start_again = Button(root, text="Reset Start", command=reset_start, width=9, bg=button_color)
@@ -226,11 +363,11 @@ class VFCutServer:
         label_end = Label(root, text="Stop:", bg=label_bg_color)
         label_end.grid(row=row, column=0)
         entry_end = Entry(root, bg=entry_bg_color)
-        entry_end.insert(END, self.cutrange[1])
+        entry_end.insert(END, self.cut_range[1])
         entry_end.grid(row=row, column=1)
 
         def reset_stop():
-            del self.cutrange[1]
+            self.current_cut.reset_end = True
             root.destroy()
 
         set_stop_again = Button(root, text="Reset Stop", command=reset_stop, width=9, bg=button_color)
@@ -239,17 +376,11 @@ class VFCutServer:
         row += 1
 
         def load_file():
-            root.filename = filedialog.askopenfilename(initialdir="/", title="Select file",
-                                                       filetypes=(("jpeg files", "*.jpg"), ("all files", "*.*")))
-            print(root.filename)
+            root.filename = filedialog.askopenfilename(initialdir="/", title="Select folder",
+                                                       filetypes=(("all files", "*.*")))
+            self.log('output_folder', root.filename)
 
-        # how to handle base and default folder if we use a new filename
-        # and if we change the base folder / default folder with the gui?
-        self.base_folder = os.path.dirname(self.in_file)
-        self.default_folder = os.path.join(self.base_folder, "clips/")
 
-        if not os.path.exists(self.default_folder):
-            os.makedirs(self.default_folder)
 
         label_output_folder = Label(root, text="Output Folder:", bg=label_bg_color)
         label_output_folder.grid(row=row, column=0)
@@ -268,20 +399,9 @@ class VFCutServer:
         entry_name.focus()
 
         def create_cut(event=None):
-            out_file = os.path.join(self.default_folder, entry_name.get())
-            if not out_file.endswith(".mp4"):
-                out_file += ".mp4"
-
-            def ffmpeg_worker(ffmpeg_command):
-                os.system("ffmpeg" + ffmpeg_command)
-            # file name needs to be in quotes, otherwise a name with spaces is
-            # seen as separate commands / filenames
-            ffmpeg_command = f" -i '{self.in_file}' -ss {self.cutrange[0]} -to {self.cutrange[1]} '{out_file}'"
-            t = threading.Thread(target=ffmpeg_worker, args=(ffmpeg_command,))
-            self.threads.append(t)
-            t.start()
-            self.running[t] = out_file
-            self.cutrange.clear()
+            self.current_cut.base_folder = os.path.join(self.current_cut.base_folder, self.default_folder)
+            self.vid_cutter.add_cut(self.current_cut)
+            self.current_cut = Cut()
             root.destroy()
 
         row += 2
