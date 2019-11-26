@@ -15,6 +15,7 @@ import subprocess
 import shutil
 import string
 import unicodedata
+
 HOST = '127.0.0.1'
 # which port?
 PORT = 65442
@@ -23,10 +24,12 @@ PORT = 65442
 def is_url(a_str):
     return a_str.startswith('http')
 
+
 class CustomArgumentParser(ArgumentParser):
     def error(self, message: Text):
         self.print_help(sys.stderr)
         raise Exception(message)
+
 
 def get_parser():
     parser = CustomArgumentParser()
@@ -74,6 +77,7 @@ def log(key, value):
     logf.write(f"{key}: {value}\n\n")
     logf.close()
 
+
 # depending if we call this from mpv or somewhere else
 # arguments might not come separately but can be joined with a string
 # eg:
@@ -91,7 +95,7 @@ def clean_argv(argv):
 class Cut:
 
     def is_url(self):
-        return is_url(self.in_filename)
+        return is_url(self.in_filepath)
 
     def get_begin_time(self):
         return self.cut_range[0]
@@ -115,7 +119,6 @@ class Cut:
     def __init__(self, ):
         self.reset_start = False
         self.reset_end = False
-        self.in_filename = None
         self.in_filepath = None
         self.cut_range = None
         self.out_filename = None
@@ -124,13 +127,11 @@ class Cut:
         self.cut_range = []
         self.working_dir = None
 
-    def set_in_values(self, in_filename, in_filepath):
-        assert (not self.in_filename)
+    def set_in_filepath(self, in_filepath):
         assert (not self.in_filepath)
-        self.in_filename = in_filename
         self.in_filepath = in_filepath
         if not self.output_folder:
-            if is_url(self.in_filename):
+            if is_url(self.in_filepath):
                 self.output_folder = os.path.join(os.path.realpath(os.curdir), "clips/")
             else:
                 self.output_folder = os.path.join(os.path.dirname(self.in_filepath), 'clips/')
@@ -157,7 +158,6 @@ class Cut:
     def clear_time(self):
         self.cut_range.clear()
 
-
     def create_thread(self, event=None):
         cut_dir = '/tmp/vfcut/cut'
         if not os.path.exists(cut_dir):
@@ -170,7 +170,6 @@ class Cut:
             if event:
                 event.wait()
             log('EVENT', 'event is set!!!!')
-
 
             subprocess.run(ffmpeg_param_list)
 
@@ -206,7 +205,7 @@ class VidCutter:
     # here we check if one thread finished and pull the next cut to perform
     def update(self):
         for t in threading.enumerate():
-            if not(t.is_alive()):
+            if not (t.is_alive()):
                 log("THREAD", f"join and remove thread: {t}")
                 t.join()
                 self.threads.remove(t)
@@ -219,7 +218,7 @@ class VidCutter:
             os.makedirs(dl_dir)
         tmp_file = tempfile.NamedTemporaryFile()
         dl_path = os.path.basename(tmp_file.name)
-        dl_path = dl_path + ".mp4" # otherwise youtube-dl will add its own extension
+        dl_path = dl_path + ".mp4"  # otherwise youtube-dl will add its own extension
         tmp_file.close()
         # we do not want forward slashes of the url in the filename
         dl_path = os.path.join(dl_dir, dl_path)
@@ -233,12 +232,13 @@ class VidCutter:
             # inside the name
             # do not use '>/dev/null', with run it thinks it is another filename
             # THIS IS NOT BASH!!! > redirection is a bash primitive
-            params = ["youtube-dl", '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best', download_url, "-o", out_filename]
+            params = ["youtube-dl", '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best', download_url,
+                      "-o", out_filename]
             log('run youtube downloader: ', params)
             subprocess.run(params)
             log("EVENT", "SET EVENT TO TRUE")
             title = subprocess.check_output(['youtube-dl', '--get-title', download_url]).decode(sys.stdout.encoding)
-            copy_path = copy_output_folder #os.path.join(copy_output_folder, title)
+            copy_path = copy_output_folder  # os.path.join(copy_output_folder, title)
             log("COPY_VID", f"dl_path:{dl_path}, copy_path: {copy_path}")
             if not os.path.exists(copy_path):
                 log("COPY_VID: ", f"path: {copy_path} does not exist, create new folder!!!")
@@ -255,36 +255,34 @@ class VidCutter:
         return download_vid_thread, download_finished_event, dl_path
 
     def cut_youtubedl(self, cut, download_finish_event, video_path):
-        cut.in_filename = os.path.basename(video_path)
         cut.in_filepath = video_path
         thread = cut.create_thread(download_finish_event)
-        thread.name = f"Thread [cut] in_filepath: {cut.in_filepath} video_path: {video_path}"
+        thread.name = f"Thread [cut] in_filepath: {cut.in_filepath} "
         thread.start()
         return thread
 
     def perform_cut(self, cut):
         if cut.is_url():
-            log('dl_youtube', f"following url was supplied: {cut.in_filename}\n start downloading with youtube-dl")
-            url = cut.in_filename
+            log('dl_youtube', f"following url was supplied: {cut.in_filepath}\n start downloading with youtube-dl")
+            url = cut.in_filepath
             # we already started downloading
             if url in self.url_to_event:
                 log('dl_youtube',
-                    f"video: {cut.in_filename} is already being downloaded.\nCreate a thread to wait for the download to finish.")
+                    f"video: {cut.in_filepath} is already being downloaded.\nCreate a thread to wait for the download to finish.")
                 cut_thread = self.cut_youtubedl(cut, self.url_to_event[url], self.url_to_video_path[url])
             else:
                 log('dl_youtube',
-                    f"video: {cut.in_filename} has not started to download.\nCreate a download thread")
-                download_thread, download_finish_event, video_path = self.dl_from_youtube(cut.in_filename,
+                    f"video: {cut.in_filepath} has not started to download.\nCreate a download thread")
+                download_thread, download_finish_event, video_path = self.dl_from_youtube(cut.in_filepath,
                                                                                           cut.output_folder)
                 cut_thread = self.cut_youtubedl(cut, download_finish_event, video_path)
 
         else:
             log('cut',
-                f"video: {cut.in_filename} is not an url, start cutting thread normally.")
+                f"video: {cut.in_filepath} is not an url, start cutting thread normally.")
             t = cut.create_thread()
             self.threads.append(t)
             t.start()
-
 
     def cut_all_buffered_cuts(self):
         for cut in self.cut_buffer:
@@ -294,7 +292,7 @@ class VidCutter:
     # we not only need to check if the file exists somewhere
     # but also if a buffered cut will create the same output file
     def is_filepath_unique(self, filepath):
-        return not(os.path.exists(filepath)) and not filepath in self.out_files
+        return not (os.path.exists(filepath)) and not filepath in self.out_files
 
     def get_out_file_path_unique(self, filepath):
         index = 1
@@ -302,7 +300,7 @@ class VidCutter:
         basename = os.path.basename(filepath)
         extension = os.path.splitext(basename)[1]
         while not self.is_filepath_unique(filepath):
-            log('out filename change', f"filename: {filepath} already exists" )
+            log('out filename change', f"filename: {filepath} already exists")
             name = os.path.splitext(basename)
             name = name[0] + "_" + str(index) + name[1]
             filepath = os.path.join(dirname, name)
@@ -310,19 +308,19 @@ class VidCutter:
             index += 1
         return filepath
 
-
     def add_cut(self, cut):
         full_out_path = cut.get_out_file_path()
         if not self.is_filepath_unique(full_out_path):
             cut.set_out_file_path(self.get_out_file_path_unique(full_out_path))
-        self.out_files.append(cut.get_out_file_path()) # store all file names, so we can check if filename is unique also among buffered cuts
+        self.out_files.append(
+            cut.get_out_file_path())  # store all file names, so we can check if filename is unique also among buffered cuts
         if self.buffer_cuts:
-           self.cut_buffer.append(cut)
+            self.cut_buffer.append(cut)
         else:
-           if len(threading.enumerate()) < self.MAX_THREADS:
+            if len(threading.enumerate()) < self.MAX_THREADS:
                 self.perform_cut(cut)
-           else:
-               self.cut_buffer.append(cut)
+            else:
+                self.cut_buffer.append(cut)
 
     def print_status(self):
         print("VFCUT Status:")
@@ -352,10 +350,11 @@ class VFCutServer:
         self.default_folder = '/clips'
         # if we set a custom path for a specific video
         # use this as the base path instead of the default (dirname(filepath)/clips)
-        self.output_path_for_in_filename = {}
+        self.output_path_for_in_filepath = {}
         self.working_dir = None
         self.current_cut = Cut()
         self.handle_arguments(argv)
+        self.default_working_dir = os.path.join(os.path.expanduser('~'), 'Videos')
 
     def print_status(self):
         self.vid_cutter.print_status()
@@ -368,10 +367,8 @@ class VFCutServer:
         events = selectors.EVENT_READ | selectors.EVENT_WRITE
         self.selector.register(conn, events, data=data)
 
-
     def update(self):
         self.vid_cutter.update()
-
 
     def handle_arguments(self, argv):
         log("args", "handle arguments")
@@ -385,18 +382,9 @@ class VFCutServer:
             print(ex)
             return
         log('args', args)
-        if all(x is None for x in vars(args).values()):
-            print("Vfcut: No option specified.")
-            # self.parser.print_help()
-            # exit(1)
-            # RETURN ERROR MESSAGE OR COMMAND TO PRINT ERROR
 
-        if (args.time and not args.input) or (args.input and not args.time):
-            print("VFCut: please supply an input filename and a time where you want to cut")
-            # self.parser.print_help()
-            # exit(1)
-            # RETURN ERROR MESSAGE OR COMMAND TO PRINT ERROR
-        if args.working_dir and args.working_dir != ".":
+        # we need to store the videos somewhere
+        if args.working_dir:
             self.working_dir = args.working_dir
 
         if args.cut_buffered_cuts:
@@ -404,30 +392,31 @@ class VFCutServer:
 
         if args.buffer_cuts:
             self.vid_cutter.buffer_cuts = True
+
         # ! the order of the parameter handling matters
         # if a new filename appears and the current cut was set to a different filename
         # we need to replace the current cut
         # this happens if you start mpv and start cutting one video
         # then you open a new video and want to cut again, VFCut will have stored the begin time
-        #e for the old video, in this case recreate a Cut object and start from the beginning
+        # e for the old video, in this case recreate a Cut object and start from the beginning
         if args.input:
             # start a new cut
-            if self.current_cut.in_filename and args.input != self.current_cut.in_filename:
+            in_filepath = args.input
+            if not is_url(in_filepath) and args.working_dir:
+                log('working_dir', args.working_dir)
+                if not os.path.isabs(in_filepath):
+                    in_filepath = os.path.join(args.working_dir, in_filepath)
+                    log("in_filepath", {in_filepath})
+                    if not os.path.exists(in_filepath):
+                        log("error", f"filepath: {in_filepath} does not exist!")
+                        return
+
+            if self.current_cut.in_filepath and in_filepath != self.current_cut.in_filepath:
                 self.current_cut = Cut()
-            if not self.current_cut.in_filename:
-                in_filename = args.input
-                in_filepath = in_filename
-                if in_filename in self.output_path_for_in_filename:  # we already set an output path for this file
-                    self.current_cut.output_folder = self.output_path_for_in_filename[in_filename]
-                if not is_url(in_filename) and args.working_dir:
-                    log('working_dir', args.working_dir)
-                    if not os.path.isabs(in_filename):
-                        in_filepath = os.path.join(args.working_dir, in_filename)
-                        log("in_filepath", {in_filepath})
-                        if not os.path.exists(in_filepath):
-                            log("error", f"filepath: {in_filepath} does not exist!")
-                            return
-                self.current_cut.set_in_values(in_filename, in_filepath)
+            if in_filepath in self.output_path_for_in_filepath:  # we already set an output path for this file
+                self.current_cut.output_folder = self.output_path_for_in_filepath[in_filepath]
+            if not self.current_cut.in_filepath:
+                self.current_cut.set_in_filepath(in_filepath)
 
         # this option is usually only called if we use VFCut solely from the cli
         # otherwise the out_filename should be set by the GUI
@@ -564,15 +553,15 @@ class VFCutServer:
         def load_file():
             chosen_folder = filedialog.askdirectory(initialdir=os.curdir, title="Select folder")
             log('output_folder', chosen_folder)
-            self.output_path_for_in_filename[self.current_cut.in_filename] = chosen_folder
+            self.output_path_for_in_filepath[self.current_cut.in_filepath] = chosen_folder
             self.current_cut.output_folder = chosen_folder
 
         label_output_folder = Label(root, text="Output Folder:", bg=label_bg_color)
         label_output_folder.grid(row=row, column=0)
         entry_output_folder = Entry(root, bg=entry_bg_color)
         output_folder = self.current_cut.output_folder
-        if self.current_cut.in_filename in self.output_path_for_in_filename:
-            output_folder = self.output_path_for_in_filename[self.current_cut.in_filename]
+        if self.current_cut.in_filepath in self.output_path_for_in_filepath:
+            output_folder = self.output_path_for_in_filepath[self.current_cut.in_filepath]
         entry_output_folder.insert(END, output_folder)
         entry_output_folder.grid(row=row, column=1, padx=10)
         output_button = Button(root, text="Browse", command=load_file, width=9, bg=button_color)
@@ -691,7 +680,7 @@ def main():
     # if os.fork():
     #    sys.exit()
     import time
-    argv = sys.argv[1:] # remove application name
+    argv = sys.argv[1:]  # remove application name
     # we are the first process (server
     try:
         vfcut_socket, selector = setup_server_socket()
