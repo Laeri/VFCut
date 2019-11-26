@@ -148,7 +148,7 @@ class Cut:
             out_folder = os.path.dirname(out_path)
             if not os.path.exists(out_folder):
                 os.makedirs(out_folder)
-            #shutil.copyfile(tmp_name, out_path)
+            shutil.copyfile(tmp_name, out_path)
 
         # you need to have all options separately for subprocess.run to work
         ffmpeg_params = ["ffmpeg", "-i", f"{self.in_filepath}", "-ss", f"{self.cut_range[0]}",
@@ -175,6 +175,7 @@ class VidCutter:
             os.makedirs(dl_dir)
         tmp_file = tempfile.NamedTemporaryFile()
         dl_path = os.path.basename(tmp_file.name)
+        dl_path = dl_path + ".mp4" # otherwise youtube-dl will add its own extension
         tmp_file.close()
         # we do not want forward slashes of the url in the filename
         dl_path = os.path.join(dl_dir, dl_path)
@@ -188,7 +189,7 @@ class VidCutter:
             # inside the name
             # do not use '>/dev/null', with run it thinks it is another filename
             # THIS IS NOT BASH!!! > redirection is a bash primitive
-            params = ["youtube-dl", download_url, "-o", out_filename]
+            params = ["youtube-dl", '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best', download_url, "-o", out_filename]
             log('run youtube downloader: ', params)
             subprocess.run(params)
             log("EVENT", "SET EVENT TO TRUE")
@@ -200,7 +201,8 @@ class VidCutter:
         return download_vid_thread, download_finished_event, dl_path
 
     def cut_youtubedl(self, cut, download_finish_event, video_path):
-        cut.in_filename = video_path
+        cut.in_filename = os.path.basename(video_path)
+        cut.in_filepath = video_path
         thread = cut.create_thread(download_finish_event)
         self.threads.append(thread)
         thread.start()
