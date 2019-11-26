@@ -78,20 +78,6 @@ def log(key, value):
     logf.close()
 
 
-# depending if we call this from mpv or somewhere else
-# arguments might not come separately but can be joined with a string
-# eg:
-# ["-i <infile>", "-o outfile"] instead of ["-i", "<infile", "-o", "<outfile"]
-# argparse is not able to handle this case correctly, therefore we 'normalize' the system arguments array
-# again
-def clean_argv(argv):
-    argv = " ".join(argv)
-    argv = argv.split(" ")
-    if argv == [""]:
-        argv = []
-    return argv
-
-
 class Cut:
 
     def is_url(self):
@@ -374,7 +360,6 @@ class VFCutServer:
     def handle_arguments(self, argv):
         log("args", "handle arguments")
 
-        argv = clean_argv(argv)
         log('argv', argv)
         try:
             args = self.parser.parse_args(argv)
