@@ -451,11 +451,10 @@ class VFCutServer:
         row += 1
 
         def load_file():
-            root.filename = filedialog.askopenfilename(initialdir="/", title="Select folder",
-                                                       filetypes=(("all files", "*.*")))
-            log('output_folder', root.filename)
-            self.output_path_for_in_filename[self.current_cut.in_filename] = root.filename
-            self.current_cut.output_folder = root.filename
+            chosen_folder = filedialog.askdirectory(initialdir=os.curdir, title="Select folder")
+            log('output_folder', chosen_folder)
+            self.output_path_for_in_filename[self.current_cut.in_filename] = chosen_folder
+            self.current_cut.output_folder = chosen_folder
 
         label_output_folder = Label(root, text="Output Folder:", bg=label_bg_color)
         label_output_folder.grid(row=row, column=0)
