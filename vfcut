@@ -132,7 +132,7 @@ class Cut:
         self.in_filepath = in_filepath
         if not self.output_folder:
             if is_url(self.in_filepath):
-                self.output_folder = os.path.join(os.path.realpath(os.curdir), "clips/")
+                self.output_folder = os.path.join(os.path.realpath(self.working_dir), "clips/")
             else:
                 self.output_folder = os.path.join(os.path.dirname(self.in_filepath), 'clips/')
 
@@ -353,6 +353,7 @@ class VFCutServer:
         self.output_path_for_in_filepath = {}
         self.working_dir = None
         self.current_cut = Cut()
+        self.current_cut.working_dir = self.working_dir
         self.handle_arguments(argv)
         self.default_working_dir = os.path.join(os.path.expanduser('~'), 'Videos')
 
@@ -386,6 +387,7 @@ class VFCutServer:
         # we need to store the videos somewhere
         if args.working_dir:
             self.working_dir = args.working_dir
+            self.current_cut.working_dir
 
         if args.cut_buffered_cuts:
             self.vid_cutter.cut_all_buffered_cuts()
@@ -413,6 +415,7 @@ class VFCutServer:
 
             if self.current_cut.in_filepath and in_filepath != self.current_cut.in_filepath:
                 self.current_cut = Cut()
+                self.current_cut.working_dir = self.working_dir
             if in_filepath in self.output_path_for_in_filepath:  # we already set an output path for this file
                 self.current_cut.output_folder = self.output_path_for_in_filepath[in_filepath]
             if not self.current_cut.in_filepath:
@@ -581,6 +584,7 @@ class VFCutServer:
             self.current_cut.set_out_values(out_filename, output_path)
             self.vid_cutter.add_cut(self.current_cut)
             self.current_cut = Cut()
+            self.current_cut.working_dir = self.working_dir
             root.destroy()
 
         row += 2
