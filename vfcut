@@ -13,6 +13,8 @@ import threading
 import tempfile
 import subprocess
 import shutil
+import string
+import unicodedata
 
 HOST = '127.0.0.1'
 # which port?
@@ -67,6 +69,12 @@ def log(key, value):
     logf.write(f"{key}: {value}\n\n")
     logf.close()
 
+def get_cleaned_filename(filename):
+    valid_filename_chars = "-_.()%s%s" % (string.ascii_letters, string.digits)
+    cleaned_filename = unicodedata.normalize('NFKD', filename).encode('ASCII', 'ignore').decode()
+    cleaned_filename = cleaned_filename.replace(' ', '_')
+    cleaned_filename = ''.join(c for c in cleaned_filename if c in valid_filename_chars)
+    return cleaned_filename
 
 class Cut:
 
@@ -169,7 +177,14 @@ class VidCutter:
         self.url_to_video_path = {}
         self.url_to_event = {}
 
-    def dl_from_youtube(self, url):
+    def update_threads(self):
+        for t in self.threads:
+            if not(t.is_alive()):
+                t.join()
+                self.threads.remove(t)
+
+
+    def dl_from_youtube(self, url, copy_output_folder):
         dl_dir = '/tmp/vfcut/dl'
         if not os.path.exists(dl_dir):
             os.makedirs(dl_dir)
@@ -193,10 +208,15 @@ class VidCutter:
             log('run youtube downloader: ', params)
             subprocess.run(params)
             log("EVENT", "SET EVENT TO TRUE")
+            title = subprocess.check_output(['youtube-dl', '--get-title', download_url])
+            title = get_cleaned_filename(title)
+            copy_path = os.path.join(copy_output_folder, title)
+            shutil.copyfile(dl_path, copy_path)
             download_finished_event.set()
 
         download_vid_thread = threading.Thread(target=download_worker, args=(url, dl_path))
         download_vid_thread.setDaemon(True)
+        self.threads.append(download_vid_thread)
         download_vid_thread.start()
         return download_vid_thread, download_finished_event, dl_path
 
@@ -220,7 +240,7 @@ class VidCutter:
             else:
                 log('dl_youtube',
                     f"video: {cut.in_filename} has not started to download.\nCreate a download thread")
-                download_thread, download_finish_event, video_path = self.dl_from_youtube(cut.in_filename)
+                download_thread, download_finish_event, video_path = self.dl_from_youtube(cut.in_filename, cut.output_folder)
                 cut_thread = self.cut_youtubedl(cut, download_finish_event, video_path)
 
         else:
@@ -273,6 +293,11 @@ class VFCutServer:
         data = types.SimpleNamespace(addr=addr, inb=b"", outb=b"")
         events = selectors.EVENT_READ | selectors.EVENT_WRITE
         self.selector.register(conn, events, data=data)
+
+
+    def update_threads(self):
+        self.vid_cutter.update_threads()
+
 
     def handle_arguments(self, argv):
         log("args", "handle arguments")
@@ -375,8 +400,9 @@ class VFCutServer:
                 sent = sock.send(data.outb)  # Should be ready to write
                 data.outb = data.outb[sent:]
 
-    def listen_connections(self):
+    def update_and_listen_connections(self):
         while True:
+            self.update_threads()
             events = self.selector.select(timeout=None)
             for key, mask in events:
                 if key.data is None:  # it is from the listening socket
@@ -596,7 +622,7 @@ def main():
     try:
         server = VFCutServer(vfcut_socket, selector, argv)
         overwrite_logfile()
-        server.listen_connections()
+        server.update_and_listen_connections()
     except Exception as ex:
         print(ex)
     finally:
