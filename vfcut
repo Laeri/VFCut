@@ -32,6 +32,8 @@ def get_parser():
     parser.add_argument("-i", "--input", dest="input", help="supply an input .mp4 file")
     parser.add_argument("-q", "-e", "-k", "--exit", "--quit", action="store_true", dest="quit",
                         help="close server")
+    parser.add_argument("-b", "--buffer-cuts", action="store_true", dest="buffer_cuts", default=False)
+    parser.add_argument("-c", "--cut-buffered-cuts", action="store_true", dest="cut_buffered_cuts", default=False)
     parser.add_argument("-s", "--status", action="store_true", dest="status",
                         help="show status (running jobs)")
     parser.add_argument("--working-dir", dest="working_dir")
@@ -75,6 +77,20 @@ def get_cleaned_filename(filename):
     cleaned_filename = filename.replace(' ', '_')
     cleaned_filename = ''.join(c for c in cleaned_filename if c in valid_filename_chars)
     return cleaned_filename
+
+# depending if we call this from mpv or somewhere else
+# arguments might not come separately but can be joined with a string
+# eg:
+# ["-i <infile>", "-o outfile"] instead of ["-i", "<infile", "-o", "<outfile"]
+# argparse is not able to handle this case correctly, therefore we 'normalize' the system arguments array
+# again
+def clean_argv(argv):
+    argv = " ".join(argv)
+    argv = argv.split(" ")
+    if argv == [""]:
+        argv = []
+    return argv
+
 
 class Cut:
 
@@ -186,8 +202,10 @@ class VidCutter:
         self.threads = []
         self.url_to_video_path = {}
         self.url_to_event = {}
+        self.buffer_cuts = False
+        self.cut_buffer = []
 
-    def update_threads(self):
+    def update(self):
         for t in threading.enumerate():
             if not(t.is_alive()):
                 log("THREAD", f"join and remove thread: {t}")
@@ -245,7 +263,7 @@ class VidCutter:
         thread.start()
         return thread
 
-    def add_cut(self, cut):
+    def perform_cut(self, cut):
         if cut.is_url():
             log('dl_youtube', f"following url was supplied: {cut.in_filename}\n start downloading with youtube-dl")
             url = cut.in_filename
@@ -257,7 +275,8 @@ class VidCutter:
             else:
                 log('dl_youtube',
                     f"video: {cut.in_filename} has not started to download.\nCreate a download thread")
-                download_thread, download_finish_event, video_path = self.dl_from_youtube(cut.in_filename, cut.output_folder)
+                download_thread, download_finish_event, video_path = self.dl_from_youtube(cut.in_filename,
+                                                                                          cut.output_folder)
                 cut_thread = self.cut_youtubedl(cut, download_finish_event, video_path)
 
         else:
@@ -266,6 +285,19 @@ class VidCutter:
             t = cut.create_thread()
             self.threads.append(t)
             t.start()
+
+
+    def cut_all_buffered_cuts(self):
+        for cut in self.cut_buffer:
+            self.cut_buffer.remove(cut)
+            self.perform_cut(cut)
+
+
+    def add_cut(self, cut):
+       if self.buffer_cuts:
+           self.cut_buffer.append(cut)
+       else:
+           self.perform_cut(cut)
 
     def print_status(self):
         print("VFCUT Status:")
@@ -313,17 +345,20 @@ class VFCutServer:
 
 
     def update_threads(self):
-        self.vid_cutter.update_threads()
+        self.vid_cutter.update()
 
 
     def handle_arguments(self, argv):
         log("args", "handle arguments")
+
+        argv = clean_argv(argv)
+        log('argv', argv)
         try:
             args = self.parser.parse_args(argv)
         except Exception as ex:
             print(ex)
             return
-
+        log('args', args)
         if all(x is None for x in vars(args).values()):
             print("Vfcut: No option specified.")
             # self.parser.print_help()
@@ -335,8 +370,14 @@ class VFCutServer:
             # self.parser.print_help()
             # exit(1)
             # RETURN ERROR MESSAGE OR COMMAND TO PRINT ERROR
-        if args.working_dir:
+        if args.working_dir and args.working_dir != ".":
             self.working_dir = args.working_dir
+
+        #if args.cut_buffered_cuts:
+        #    self.vid_cutter.cut_all_buffered_cuts()
+
+        #if args.buffer_cuts:
+        #    self.vid_cutter.buffer_cuts = True
         # ! the order of the parameter handling matters
         # if a new filename appears and the current cut was set to a different filename
         # we need to replace the current cut
@@ -619,7 +660,7 @@ def main():
     # if os.fork():
     #    sys.exit()
     import time
-    argv = sys.argv[1:]
+
     # we are the first process (server
     try:
         vfcut_socket, selector = setup_server_socket()
