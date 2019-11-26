@@ -622,6 +622,11 @@ class VFCutClient:
                 print("sending", repr(data.outb), "to connection", data.connid)
                 sent = sock.send(data.outb)  # Should be ready to write
                 data.outb = data.outb[sent:]
+            else:
+                # directly quit after sending
+                # @Incomplete: if we want to receive something this needs to change
+                print("SENT ALL, QUITTING")
+                sys.exit(0)
 
     # CLIENT
     def connect_to_server(self, host, port):
