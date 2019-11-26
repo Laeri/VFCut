@@ -15,7 +15,6 @@ import subprocess
 import shutil
 import string
 import unicodedata
-
 HOST = '127.0.0.1'
 # which port?
 PORT = 65442
@@ -24,9 +23,13 @@ PORT = 65442
 def is_url(a_str):
     return a_str.startswith('http')
 
+class CustomArgumentParser(ArgumentParser):
+    def error(self, message: Text):
+        self.print_help(sys.stderr)
+        raise Exception(message)
 
 def get_parser():
-    parser = ArgumentParser()
+    parser = CustomArgumentParser()
     # parser.add_argument("-o", dest="output", help="store clip in output file")  # remove, as we set this from the gui?
     parser.add_argument("-t", "--time", dest="time", help="supply start or end time")
     parser.add_argument("-i", "--input", dest="input", help="supply an input .mp4 file")
@@ -356,6 +359,7 @@ class VFCutServer:
         try:
             args = self.parser.parse_args(argv)
         except Exception as ex:
+            log("EXCEPTION_CATCH", F"{type(ex)}, {ex}")
             print(ex)
             return
         log('args', args)
@@ -383,7 +387,7 @@ class VFCutServer:
         # we need to replace the current cut
         # this happens if you start mpv and start cutting one video
         # then you open a new video and want to cut again, VFCut will have stored the begin time
-        # for the old video, in this case recreate a Cut object and start from the beginning
+        #e for the old video, in this case recreate a Cut object and start from the beginning
         if args.input:
             # start a new cut
             if self.current_cut.in_filename and args.input != self.current_cut.in_filename:
@@ -400,7 +404,7 @@ class VFCutServer:
                         log("in_filepath", {in_filepath})
                         if not os.path.exists(in_filepath):
                             log("error", f"filepath: {in_filepath} does not exist!")
-                            exit(1)
+                            return
                 self.current_cut.set_in_values(in_filename, in_filepath)
 
         # this option is usually only called if we use VFCut solely from the cli
