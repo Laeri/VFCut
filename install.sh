@@ -7,5 +7,5 @@ sudo cp ./vfcut /usr/bin/
 if [[ ! ~/.config/mpv ]]; then
   mkdir -p ~/.config/mpv
 fi
-echo 't run "vfcut" "-t ${playback-time/full}" "-i ${path}" "--mpv-working-dir ${working-directory}"; cycle pause' >> ~/.config/mpv/input.conf
+echo 't run "vfcut" "-t" "${playback-time/full}" "-i" "${path}" "--working-dir" "${working-directory}"; cycle pause' >> ~/.config/mpv/input.conf
 

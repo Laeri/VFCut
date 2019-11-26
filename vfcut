@@ -74,13 +74,6 @@ def log(key, value):
     logf.write(f"{key}: {value}\n\n")
     logf.close()
 
-def get_cleaned_filename(filename):
-    valid_filename_chars = "-_.()%s%s" % (string.ascii_letters, string.digits)
-    #cleaned_filename = unicodedata.normalize('NFKD', filename).encode('ASCII', 'ignore').decode()
-    cleaned_filename = filename.replace(' ', '_')
-    cleaned_filename = ''.join(c for c in cleaned_filename if c in valid_filename_chars)
-    return cleaned_filename
-
 # depending if we call this from mpv or somewhere else
 # arguments might not come separately but can be joined with a string
 # eg:
@@ -114,6 +107,10 @@ class Cut:
         if not out_file_path.endswith(".mp4"):
             out_file_path += ".mp4"
         return out_file_path
+
+    def set_out_file_path(self, path):
+        self.output_folder = os.path.dirname(path)
+        self.out_filename = os.path.basename(path)
 
     def __init__(self, ):
         self.reset_start = False
@@ -160,6 +157,7 @@ class Cut:
     def clear_time(self):
         self.cut_range.clear()
 
+
     def create_thread(self, event=None):
         cut_dir = '/tmp/vfcut/cut'
         if not os.path.exists(cut_dir):
@@ -173,12 +171,6 @@ class Cut:
                 event.wait()
             log('EVENT', 'event is set!!!!')
 
-            # make final output name unique
-            index = 1
-            while os.path.exists(self.get_out_file_path()):
-                name = os.path.splitext(self.out_filename)
-                name = os.path.join(name[0], f"_{index}", name[1])
-                self.out_filename = name
 
             subprocess.run(ffmpeg_param_list)
 
@@ -207,14 +199,19 @@ class VidCutter:
         self.url_to_event = {}
         self.buffer_cuts = False
         self.cut_buffer = []
+        self.MAX_THREADS = 6
+        self.out_files = []
 
+    # if there are already MAX_THREADS, all subsequent cuts are buffered
+    # here we check if one thread finished and pull the next cut to perform
     def update(self):
         for t in threading.enumerate():
             if not(t.is_alive()):
                 log("THREAD", f"join and remove thread: {t}")
                 t.join()
                 self.threads.remove(t)
-
+        while len(threading.enumerate()) < self.MAX_THREADS and self.cut_buffer:
+            self.perform_cut(self.cut_buffer.pop(0))
 
     def dl_from_youtube(self, url, copy_output_folder):
         dl_dir = '/tmp/vfcut/dl'
@@ -241,7 +238,6 @@ class VidCutter:
             subprocess.run(params)
             log("EVENT", "SET EVENT TO TRUE")
             title = subprocess.check_output(['youtube-dl', '--get-title', download_url]).decode(sys.stdout.encoding)
-            title = get_cleaned_filename(title)
             copy_path = copy_output_folder #os.path.join(copy_output_folder, title)
             log("COPY_VID", f"dl_path:{dl_path}, copy_path: {copy_path}")
             if not os.path.exists(copy_path):
@@ -295,12 +291,38 @@ class VidCutter:
             self.cut_buffer.remove(cut)
             self.perform_cut(cut)
 
+    # we not only need to check if the file exists somewhere
+    # but also if a buffered cut will create the same output file
+    def is_filepath_unique(self, filepath):
+        return not(os.path.exists(filepath)) and not filepath in self.out_files
+
+    def get_out_file_path_unique(self, filepath):
+        index = 1
+        dirname = os.path.dirname(filepath)
+        basename = os.path.basename(filepath)
+        extension = os.path.splitext(basename)[1]
+        while not self.is_filepath_unique(filepath):
+            log('out filename change', f"filename: {filepath} already exists" )
+            name = os.path.splitext(basename)
+            name = name[0] + "_" + str(index) + name[1]
+            filepath = os.path.join(dirname, name)
+            log('out_filename', f"new potential filename: {filepath}")
+            index += 1
+        return filepath
+
 
     def add_cut(self, cut):
-       if self.buffer_cuts:
+        full_out_path = cut.get_out_file_path()
+        if not self.is_filepath_unique(full_out_path):
+            cut.set_out_file_path(self.get_out_file_path_unique(full_out_path))
+        self.out_files.append(cut.get_out_file_path()) # store all file names, so we can check if filename is unique also among buffered cuts
+        if self.buffer_cuts:
            self.cut_buffer.append(cut)
-       else:
-           self.perform_cut(cut)
+        else:
+           if len(threading.enumerate()) < self.MAX_THREADS:
+                self.perform_cut(cut)
+           else:
+               self.cut_buffer.append(cut)
 
     def print_status(self):
         print("VFCUT Status:")
@@ -347,7 +369,7 @@ class VFCutServer:
         self.selector.register(conn, events, data=data)
 
 
-    def update_threads(self):
+    def update(self):
         self.vid_cutter.update()
 
 
@@ -397,7 +419,7 @@ class VFCutServer:
                 in_filepath = in_filename
                 if in_filename in self.output_path_for_in_filename:  # we already set an output path for this file
                     self.current_cut.output_folder = self.output_path_for_in_filename[in_filename]
-                if not is_url(in_filename) and args.mpv_working_dir:
+                if not is_url(in_filename) and args.working_dir:
                     log('working_dir', args.working_dir)
                     if not os.path.isabs(in_filename):
                         in_filepath = os.path.join(args.working_dir, in_filename)
@@ -465,7 +487,7 @@ class VFCutServer:
 
     def update_and_listen_connections(self):
         while True:
-            self.update_threads()
+            self.update()
             events = self.selector.select(timeout=None)
             for key, mask in events:
                 if key.data is None:  # it is from the listening socket
