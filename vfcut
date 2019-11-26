@@ -373,11 +373,11 @@ class VFCutServer:
         if args.working_dir and args.working_dir != ".":
             self.working_dir = args.working_dir
 
-        #if args.cut_buffered_cuts:
-        #    self.vid_cutter.cut_all_buffered_cuts()
+        if args.cut_buffered_cuts:
+            self.vid_cutter.cut_all_buffered_cuts()
 
-        #if args.buffer_cuts:
-        #    self.vid_cutter.buffer_cuts = True
+        if args.buffer_cuts:
+            self.vid_cutter.buffer_cuts = True
         # ! the order of the parameter handling matters
         # if a new filename appears and the current cut was set to a different filename
         # we need to replace the current cut
@@ -660,7 +660,7 @@ def main():
     # if os.fork():
     #    sys.exit()
     import time
-
+    argv = sys.argv[1:] # remove application name
     # we are the first process (server
     try:
         vfcut_socket, selector = setup_server_socket()
