@@ -13,11 +13,10 @@ import threading
 import tempfile
 import subprocess
 import shutil
-import string
-import unicodedata
+import traceback
 
 HOST = '127.0.0.1'
-# which port?
+# @Question: which port?
 PORT = 65442
 
 
@@ -75,6 +74,10 @@ def log(key, value):
     print(f"{key} : {value}")
     logf = open(log_file_path, 'a')
     logf.write(f"{key}: {value}\n\n")
+    if key == 'exception':
+        logf.write('some additional data\n')
+        logf.write(traceback.format_exc())
+        logf.write(str(traceback.format_stack()))
     logf.close()
 
 
@@ -114,13 +117,7 @@ class Cut:
         self.working_dir = None
 
     def set_in_filepath(self, in_filepath):
-        assert (not self.in_filepath)
         self.in_filepath = in_filepath
-        if not self.output_folder:
-            if is_url(self.in_filepath):
-                self.output_folder = os.path.join(os.path.realpath(self.working_dir), "clips/")
-            else:
-                self.output_folder = os.path.join(os.path.dirname(self.in_filepath), 'clips/')
 
     def set_out_values(self, out_filename, output_folder):
         self.out_filename = out_filename
@@ -365,6 +362,7 @@ class VFCutServer:
             args = self.parser.parse_args(argv)
         except Exception as ex:
             log("EXCEPTION_CATCH", F"{type(ex)}, {ex}")
+            log('exception_details', traceback.print_exc())
             print(ex)
             return
         log('args', args)
@@ -406,6 +404,12 @@ class VFCutServer:
             if not self.current_cut.in_filepath:
                 self.current_cut.set_in_filepath(in_filepath)
 
+            if not self.current_cut.output_folder:
+                if is_url(self.current_cut.in_filepath):
+                    self.current_cut.output_folder = os.path.join(os.path.realpath(self.working_dir), "clips/")
+                else:
+                    self.current_cut.output_folder = os.path.join(os.path.dirname(self.current_cut.in_filepath),
+                                                                  'clips/')
         # this option is usually only called if we use VFCut solely from the cli
         # otherwise the out_filename should be set by the GUI
         # if args.output:
@@ -440,7 +444,11 @@ class VFCutServer:
         # OPEN GUI IF NECESSARY
         if self.current_cut.is_cut_time_set():
             log("gui", 'try to open confirm window')
-            self.open_confirm_window(args)
+            try:
+                self.open_confirm_window(args)
+            except Exception as ex:
+                log('exception', str(ex))
+                log('exception_details', traceback.print_exc())
 
     def service_connection(self, key, mask):
         sock = key.fileobj
@@ -674,14 +682,15 @@ def main():
     try:
         vfcut_socket, selector = setup_server_socket()
     except Exception as toplevelex:
-        print(toplevelex)
+        log('exception', str(toplevelex))
+        log('exception_details', traceback.print_exc())
         # there is already a server, so we relay arguments to it
         client = VFCutClient(argv)
         client_sock = client.connect_to_server(HOST, PORT)
         try:
             client.run_eventloop()
         except Exception as ex:
-            print(ex)
+            log('exception', str(ex))
             client_sock.close()
             exit(1)
         finally:
@@ -692,7 +701,8 @@ def main():
         overwrite_logfile()
         server.update_and_listen_connections()
     except Exception as ex:
-        print(ex)
+        log('exception', str(ex))
+        log('exception_details', traceback.print_exc())
     finally:
         vfcut_socket.close()
 
