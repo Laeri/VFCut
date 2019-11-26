@@ -71,8 +71,8 @@ def log(key, value):
 
 def get_cleaned_filename(filename):
     valid_filename_chars = "-_.()%s%s" % (string.ascii_letters, string.digits)
-    cleaned_filename = unicodedata.normalize('NFKD', filename).encode('ASCII', 'ignore').decode()
-    cleaned_filename = cleaned_filename.replace(' ', '_')
+    #cleaned_filename = unicodedata.normalize('NFKD', filename).encode('ASCII', 'ignore').decode()
+    cleaned_filename = filename.replace(' ', '_')
     cleaned_filename = ''.join(c for c in cleaned_filename if c in valid_filename_chars)
     return cleaned_filename
 
@@ -152,7 +152,17 @@ class Cut:
             if event:
                 event.wait()
             log('EVENT', 'event is set!!!!')
+
+            # make final output name unique
+            index = 1
+            while os.path.exists(self.get_out_file_path()):
+                name = os.path.splitext(self.out_filename)
+                name = os.path.join(name[0], f"_{index}", name[1])
+                self.out_filename = name
+
             subprocess.run(ffmpeg_param_list)
+
+            # make
             out_folder = os.path.dirname(out_path)
             if not os.path.exists(out_folder):
                 os.makedirs(out_folder)
@@ -208,9 +218,9 @@ class VidCutter:
             log('run youtube downloader: ', params)
             subprocess.run(params)
             log("EVENT", "SET EVENT TO TRUE")
-            title = subprocess.check_output(['youtube-dl', '--get-title', download_url])
+            title = subprocess.check_output(['youtube-dl', '--get-title', download_url]).decode(sys.stdout.encoding)
             title = get_cleaned_filename(title)
-            copy_path = os.path.join(copy_output_folder, title)
+            copy_path = copy_output_folder #os.path.join(copy_output_folder, title)
             shutil.copyfile(dl_path, copy_path)
             download_finished_event.set()
 
