@@ -106,6 +106,7 @@ class Cut:
         self.working_dir = None
         self.output_folder = None
         self.cut_range = []
+        self.working_dir = None
 
     def set_in_values(self, in_filename, in_filepath):
         assert (not self.in_filename)
@@ -179,7 +180,6 @@ class Cut:
 class VidCutter:
 
     def __init__(self):
-        self.threads = []
         self.running = {}
         self.finished = {}
         self.cuts = []
@@ -188,8 +188,9 @@ class VidCutter:
         self.url_to_event = {}
 
     def update_threads(self):
-        for t in self.threads:
+        for t in threading.enumerate():
             if not(t.is_alive()):
+                log("THREAD", f"join and remove thread: {t}")
                 t.join()
                 self.threads.remove(t)
 
@@ -221,12 +222,18 @@ class VidCutter:
             title = subprocess.check_output(['youtube-dl', '--get-title', download_url]).decode(sys.stdout.encoding)
             title = get_cleaned_filename(title)
             copy_path = copy_output_folder #os.path.join(copy_output_folder, title)
+            log("COPY_VID", f"dl_path:{dl_path}, copy_path: {copy_path}")
+            if not os.path.exists(copy_path):
+                log("COPY_VID: ", f"path: {copy_path} does not exist, create new folder!!!")
+                os.makedirs(copy_path)
+            copy_path = os.path.join(copy_path, title)
+            copy_path = copy_path + '.mp4'
             shutil.copyfile(dl_path, copy_path)
             download_finished_event.set()
 
         download_vid_thread = threading.Thread(target=download_worker, args=(url, dl_path))
         download_vid_thread.setDaemon(True)
-        self.threads.append(download_vid_thread)
+        download_vid_thread.name = f"Thread [dl_youtube] path: {dl_path}"
         download_vid_thread.start()
         return download_vid_thread, download_finished_event, dl_path
 
@@ -234,7 +241,7 @@ class VidCutter:
         cut.in_filename = os.path.basename(video_path)
         cut.in_filepath = video_path
         thread = cut.create_thread(download_finish_event)
-        self.threads.append(thread)
+        thread.name = f"Thread [cut] in_filepath: {cut.in_filepath} video_path: {video_path}"
         thread.start()
         return thread
 
@@ -289,7 +296,7 @@ class VFCutServer:
         # if we set a custom path for a specific video
         # use this as the base path instead of the default (dirname(filepath)/clips)
         self.output_path_for_in_filename = {}
-
+        self.working_dir = None
         self.current_cut = Cut()
         self.handle_arguments(argv)
 
@@ -328,7 +335,8 @@ class VFCutServer:
             # self.parser.print_help()
             # exit(1)
             # RETURN ERROR MESSAGE OR COMMAND TO PRINT ERROR
-
+        if args.working_dir:
+            self.working_dir = args.working_dir
         # ! the order of the parameter handling matters
         # if a new filename appears and the current cut was set to a different filename
         # we need to replace the current cut
@@ -345,7 +353,7 @@ class VFCutServer:
                 if in_filename in self.output_path_for_in_filename:  # we already set an output path for this file
                     self.current_cut.output_folder = self.output_path_for_in_filename[in_filename]
                 if not is_url(in_filename) and args.mpv_working_dir:
-                    log('mpv_working_dir', args.working_dir)
+                    log('working_dir', args.working_dir)
                     if not os.path.isabs(in_filename):
                         in_filepath = os.path.join(args.working_dir, in_filename)
                         log("in_filepath", {in_filepath})
@@ -535,7 +543,7 @@ class VFCutServer:
         label_help.grid(row=row, column=0, columnspan=4, pady=30)
 
         entry_name.bind('<Return>', create_cut)
-        root.geometry('500x450')
+        root.geometry('600x450')
         root.mainloop()
 
 
