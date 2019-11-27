@@ -155,12 +155,13 @@ class Cut:
             log('EVENT', 'event is set!!!!')
 
             subprocess.run(ffmpeg_param_list)
-
+            log('ffmpeg worker', f"cut {ffmpeg_param_list} finished")
             # make
             out_folder = os.path.dirname(out_path)
             if not os.path.exists(out_folder):
                 os.makedirs(out_folder)
             shutil.copyfile(tmp_name, out_path)
+            log('ffmpeg worker', f"copy {tmp_name} to {out_path}")
 
         # you need to have all options separately for subprocess.run to work
         ffmpeg_params = ["ffmpeg", "-i", f"{self.in_filepath}", "-ss", f"{self.cut_range[0]}",
@@ -405,7 +406,10 @@ class VFCutServer:
                 self.current_cut.set_in_filepath(in_filepath)
 
             if not self.current_cut.output_folder:
-                if is_url(self.current_cut.in_filepath):
+                if self.current_cut.in_filepath in self.output_path_for_in_filepath:
+                    output_folder = self.output_path_for_in_filepath[self.current_cut.in_filepath]
+                    self.current_cut.output_folder = output_folder
+                elif is_url(self.current_cut.in_filepath):
                     self.current_cut.output_folder = os.path.join(os.path.realpath(self.working_dir), "clips/")
                 else:
                     self.current_cut.output_folder = os.path.join(os.path.dirname(self.current_cut.in_filepath),
@@ -556,8 +560,7 @@ class VFCutServer:
         label_output_folder.grid(row=row, column=0)
         entry_output_folder = Entry(root, bg=entry_bg_color)
         output_folder = self.current_cut.output_folder
-        if self.current_cut.in_filepath in self.output_path_for_in_filepath:
-            output_folder = self.output_path_for_in_filepath[self.current_cut.in_filepath]
+
         entry_output_folder.insert(END, output_folder)
         entry_output_folder.grid(row=row, column=1, padx=10)
         output_button = Button(root, text="Browse", command=load_file, width=9, bg=button_color)
