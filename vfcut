@@ -103,9 +103,10 @@ class Cut:
         self.output_folder = None
         self.cut_range = []
         self.working_dir = None
+        #self.cut_name
 
     def __str__(self):
-        return f"Cut: ({self.in_filepath} --> {self.output_folder}) time:{self.cut_range}"
+        return f"Cut: ({self.in_filepath} --> {self.get_out_file_path()}) time:{self.cut_range}"
 
     def set_in_filepath(self, in_filepath):
         self.in_filepath = in_filepath
@@ -138,17 +139,20 @@ class Cut:
             os.makedirs(cut_dir)
         tmp_name = os.path.join(cut_dir, os.path.basename(self.get_out_file_path()))
 
-        def ffmpeg_worker(ffmpeg_param_list, tmp_name, out_path, event):
-            if event:
-                event.wait()
+        def ffmpeg_worker(ffmpeg_param_list, in_tmp_name, out_path, dl_finished_event):
+            if dl_finished_event:
+                dl_finished_event.wait()
             subprocess.run(ffmpeg_param_list)
             log('ffmpeg worker', f"cut {ffmpeg_param_list} finished")
             # make
             out_folder = os.path.dirname(out_path)
             if not os.path.exists(out_folder):
                 os.makedirs(out_folder)
-            log('ffmpeg worker', f"copy {tmp_name} to {out_path}")
+            log('ffmpeg worker', f"copy {in_tmp_name} to {out_path}")
             shutil.copyfile(tmp_name, out_path)
+            log('ffmpeg_worker', f"cut {ffmpeg_param_list} finished copying")
+            return
+
 
         # you need to have all options separately for subprocess.run to work
         ffmpeg_params = ["ffmpeg", "-i", f"{self.in_filepath}", "-ss", f"{self.cut_range[0]}",
@@ -172,13 +176,14 @@ class VidCutter:
         self.url_to_event = {}
         self.buffer_all = False
         self.cut_buffer = []
-        self.max_threads = 6
+        self.max_threads = 10
         self.out_files = []
 
-    # if there are already MAX_THREADS, all subsequent cuts are buffered
+    # if there are already max_threads, all subsequent cuts are buffered
     # here we check if one thread finished and pull the next cut to perform
+    # do not use threading.enumerate(), this only enumerates *alive* threads
     def update(self):
-        for thread in threading.enumerate():
+        for thread in enumerate(self.threads):
             if not thread.is_alive():
                 log("THREAD", f"join and remove thread: {thread}")
                 if thread.cut:  # no download thread, a cutting thread
@@ -245,6 +250,7 @@ class VidCutter:
         thread = cut.create_thread(download_finish_event)
         thread.name = f"Thread [cut] in_filepath: {cut.in_filepath} "
         thread.cut = self
+        self.threads.append(thread)
         thread.start()
         return thread
 
@@ -265,8 +271,9 @@ class VidCutter:
                 log('dl_youtube',
                     f"video: {cut.in_filepath} has not started to download.\nCreate a download "
                     f"thread")
-                _, download_finish_event, video_path = self.dl_from_youtube(cut.in_filepath,
+                download_thread, download_finish_event, video_path = self.dl_from_youtube(cut.in_filepath,
                                                                             cut.output_folder)
+                self.threads.append(download_thread)
                 self.cut_youtubedl(cut, download_finish_event, video_path)
 
         else:
@@ -345,6 +352,7 @@ class VidCutter:
         print("********************")
 
 
+
 class VFCutServer:
     def __init__(self, vfcut_socket, selector, argv):
         self.socket = vfcut_socket
@@ -374,7 +382,6 @@ class VFCutServer:
         self.selector.register(conn, events, data=data)
 
     def update(self):
-        print('UPDATE')
         self.vid_cutter.update()
 
     def handle_arguments(self, argv):
@@ -493,8 +500,11 @@ class VFCutServer:
     def update_and_listen_connections(self):
         while True:
             self.update()
-            events = self.selector.select(timeout=None)
+            # need to have a timeout, otherwise we are stuck in this loop
+            # and update is not called until we receive another message
+            events = self.selector.select(timeout=1)
             for key, mask in events:
+                print('event received')
                 if key.data is None:  # it is from the listening socket
                     self.accept_wrapper(key.fileobj)
                 else:
@@ -722,8 +732,8 @@ def create_log_folders_and_files():
 
 def main():
     # temporary turn off forking, so we can debug the application better
-    # if os.fork():
-    #    sys.exit()
+    if os.fork():
+        sys.exit()
     argv = sys.argv[1:]  # remove application name
     create_log_folders_and_files()
 
