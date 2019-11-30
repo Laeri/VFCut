@@ -19,11 +19,20 @@ HOST = '127.0.0.1'
 # @Question: which port?
 PORT = 65442
 
+CONFIG_FOLDER = os.path.expanduser('~/.config/vfcut')
+LOG_FOLDER_PATH = '/tmp/vfcut/'
+LOG_FILE_PATH = os.path.join(LOG_FOLDER_PATH, 'vfcut_log.txt')
+URL_VID_LOG_PATH = os.path.join(CONFIG_FOLDER, 'url_vids.txt')
+CUT_LOG_PATH = os.path.join(CONFIG_FOLDER, 'cuts.txt')
+
 
 def is_url(a_str):
     return a_str.startswith('http')
 
 
+# use a custom ArgumentParser so we do not exit
+# on wrong arguments, as we will parse the commands from any client sent to
+# the server, just log the output and wait for the next connection
 class CustomArgumentParser(ArgumentParser):
     def error(self, message: Text):
         self.print_help(sys.stderr)
@@ -47,32 +56,9 @@ def get_parser():
     return parser
 
 
-LOG_FOLDER_PATH = '/tmp/vfcut/'
-LOG_FILE_NAME = 'vfcut_log.txt'
-LOG_FILE_PATH = os.path.join(LOG_FOLDER_PATH, LOG_FILE_NAME)
-print('TEST')
-if not os.path.exists(LOG_FOLDER_PATH):
-    os.makedirs(LOG_FOLDER_PATH)
-if not os.path.exists(LOG_FILE_PATH):
-    open(LOG_FILE_PATH, 'w').close()
-
-
-def overwrite_logfile():
-    if not os.path.exists(LOG_FOLDER_PATH):
-        os.makedirs(LOG_FOLDER_PATH)
-    log_file_path = os.path.join(LOG_FOLDER_PATH, LOG_FILE_NAME)
-    if not os.path.exists(log_file_path):
-        open(log_file_path, 'w').close()
-    else:
-        logf = open(log_file_path, 'w')
-        logf.write("\n")
-        logf.close()
-
-
 def log(key, value):
-    log_file_path = os.path.join(LOG_FOLDER_PATH, LOG_FILE_NAME)
     print(f"{key} : {value}")
-    logf = open(log_file_path, 'a')
+    logf = open(LOG_FILE_PATH, 'a')
     logf.write(f"{key}: {value}\n\n")
     if key == 'exception':
         logf.write('some additional data\n')
@@ -146,27 +132,23 @@ class Cut:
         if not os.path.exists(cut_dir):
             os.makedirs(cut_dir)
         tmp_name = os.path.join(cut_dir, os.path.basename(self.get_out_file_path()))
-        print(f"tmp name: {tmp_name}")
-        real_output_path = self.get_out_file_path()
 
         def ffmpeg_worker(ffmpeg_param_list, tmp_name, out_path, event):
             if event:
                 event.wait()
-            log('EVENT', 'event is set!!!!')
-
             subprocess.run(ffmpeg_param_list)
             log('ffmpeg worker', f"cut {ffmpeg_param_list} finished")
             # make
             out_folder = os.path.dirname(out_path)
             if not os.path.exists(out_folder):
                 os.makedirs(out_folder)
-            shutil.copyfile(tmp_name, out_path)
             log('ffmpeg worker', f"copy {tmp_name} to {out_path}")
+            shutil.copyfile(tmp_name, out_path)
 
         # you need to have all options separately for subprocess.run to work
         ffmpeg_params = ["ffmpeg", "-i", f"{self.in_filepath}", "-ss", f"{self.cut_range[0]}",
                          "-to", f"{self.cut_range[1]}", f"{tmp_name}"]
-        log('cut worker command: ', ffmpeg_params)
+        log('ffmpeg_worker: start cutting: ', ffmpeg_params)
         t = threading.Thread(target=ffmpeg_worker, args=(ffmpeg_params, tmp_name, self.get_out_file_path(), event))
         return t
 
@@ -174,9 +156,8 @@ class Cut:
 class VidCutter:
 
     def __init__(self):
-        self.running = {}
-        self.finished = {}
-        self.cuts = []
+        self.running = []
+        self.finished = []
         self.threads = []
         self.url_to_video_path = {}
         self.url_to_event = {}
@@ -200,6 +181,7 @@ class VidCutter:
         dl_dir = '/tmp/vfcut/dl'
         if not os.path.exists(dl_dir):
             os.makedirs(dl_dir)
+        # use a named temporary file just to get a valid random name from /tmp/
         tmp_file = tempfile.NamedTemporaryFile()
         dl_path = os.path.basename(tmp_file.name)
         dl_path = dl_path + ".mp4"  # otherwise youtube-dl will add its own extension
@@ -220,8 +202,14 @@ class VidCutter:
                       "-o", out_filename]
             log('run youtube downloader: ', params)
             subprocess.run(params)
-            log("EVENT", "SET EVENT TO TRUE")
+            log('downloader finished: ', params)
             title = subprocess.check_output(['youtube-dl', '--get-title', download_url]).decode(sys.stdout.encoding)
+            try:
+                log_url_file = open(URL_VID_LOG_PATH, 'a')
+                log_url_file.write(f"{download_url} #### {title}")
+                log_url_file.close()
+            except:
+                log('error', f"could not open: {URL_VID_LOG_PATH}")
             copy_path = copy_output_folder  # os.path.join(copy_output_folder, title)
             log("COPY_VID", f"dl_path:{dl_path}, copy_path: {copy_path}")
             if not os.path.exists(copy_path):
@@ -242,10 +230,12 @@ class VidCutter:
         cut.in_filepath = video_path
         thread = cut.create_thread(download_finish_event)
         thread.name = f"Thread [cut] in_filepath: {cut.in_filepath} "
+        thread.cut = self
         thread.start()
         return thread
 
     def perform_cut(self, cut):
+        self.running.append(cut)
         if cut.is_url():
             log('dl_youtube', f"following url was supplied: {cut.in_filepath}\n start downloading with youtube-dl")
             url = cut.in_filepath
@@ -298,6 +288,11 @@ class VidCutter:
             cut.set_out_file_path(self.get_out_file_path_unique(full_out_path))
         self.out_files.append(
             cut.get_out_file_path())  # store all file names, so we can check if filename is unique also among buffered cuts
+        try:
+            log_cut_file = open(CUT_LOG_PATH, 'a')
+        except Exception as ex:
+            log('error', f"could not open {CUT_LOG_PATH}.")
+            log('error', ex)
         if self.buffer_cuts:
             self.cut_buffer.append(cut)
         else:
@@ -308,19 +303,6 @@ class VidCutter:
 
     def print_status(self):
         print("VFCUT Status:")
-        if not self.running:
-            print("No running jobs at the moment!")
-        if not self.running:
-            print("FINISHED")
-        else:
-            print("RUNNING JOBS:")
-            for t, name in self.running.items():
-                print(f"running: [{t}] {name}")
-        if self.finished:
-            print("FINISHED JOBS:")
-            for t, name in self.finished.items():
-                print(f"finished: [{t}] {name}")
-                self.finished.clear()
 
 
 class VFCutServer:
@@ -427,12 +409,6 @@ class VFCutServer:
             exit(0)
 
         if args.status:
-            for t in self.threads:
-                print(t.is_alive())
-                if not t.is_alive():
-                    self.finished[t] = t
-                    t.join()
-                    del self.running[t]
             self.print_status()
 
         if args.time:
@@ -675,12 +651,35 @@ def setup_server_socket():
     return sock, selector
 
 
+def create_log_folders_and_files():
+    # this needs to go before the log function as the log folder does not exist yet
+    if not os.path.exists(LOG_FOLDER_PATH):
+        print('create new log folder directory')
+        os.makedirs(LOG_FOLDER_PATH)
+    if not os.path.exists(LOG_FILE_PATH):
+        print('create new log file')
+        open(LOG_FILE_PATH, 'w').close()
+
+    if not os.path.exists(CONFIG_FOLDER):
+        log('general', f"config folder: {CONFIG_FOLDER} does not exist.\n Creating new folder.")
+        os.makedirs(CONFIG_FOLDER)
+
+    if not os.path.exists(URL_VID_LOG_PATH):
+        log('general', f"URL Video Log File: {URL_VID_LOG_PATH} does not exist.\n Creating new file.")
+        open(URL_VID_LOG_PATH, 'w').close()
+    if not os.path.exists(CUT_LOG_PATH):
+        log('general', f"Cut Log File: {CUT_LOG_PATH} does not exist.\n Creating new file.")
+        open(CUT_LOG_PATH, 'w').close()
+
+
 def main():
     # temporary turn off forking, so we can debug the application better
     # if os.fork():
     #    sys.exit()
     import time
     argv = sys.argv[1:]  # remove application name
+    create_log_folders_and_files()
+
     # we are the first process (server
     try:
         vfcut_socket, selector = setup_server_socket()
@@ -701,7 +700,6 @@ def main():
 
     try:
         server = VFCutServer(vfcut_socket, selector, argv)
-        overwrite_logfile()
         server.update_and_listen_connections()
     except Exception as ex:
         log('exception', str(ex))
