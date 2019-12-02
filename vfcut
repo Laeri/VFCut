@@ -162,8 +162,8 @@ class Cut:
                                                               tmp_name,
                                                               self.get_out_file_path(),
                                                               event))
-        thread.cut = self
         return thread
+
 
 
 class VidCutter:
@@ -172,27 +172,29 @@ class VidCutter:
         self.running = []
         self.finished = []
         self.threads = []
+        self.thread_to_cut = {}
         self.url_to_video_path = {}
         self.url_to_event = {}
         self.buffer_all = False
         self.cut_buffer = []
-        self.max_threads = 10
+        self.max_threads = 4
         self.out_files = []
 
     # if there are already max_threads, all subsequent cuts are buffered
     # here we check if one thread finished and pull the next cut to perform
     # do not use threading.enumerate(), this only enumerates *alive* threads
     def update(self):
-        for thread in enumerate(self.threads):
+        for thread in self.threads:
             if not thread.is_alive():
                 log("THREAD", f"join and remove thread: {thread}")
-                if thread.cut:  # no download thread, a cutting thread
-                    cut = thread.cut
+                if thread in self.thread_to_cut:  # no download thread, a cutting thread
+                    cut = self.thread_to_cut[thread]
+                    del self.thread_to_cut[thread]
                     self.running.remove(cut)
                     self.finished.append(cut)
                 thread.join()
                 self.threads.remove(thread)
-        while len(threading.enumerate()) < self.max_threads and self.cut_buffer:
+        while len(self.threads) < self.max_threads and self.cut_buffer:
             self.perform_cut(self.cut_buffer.pop(0))
 
     def dl_from_youtube(self, url, copy_output_folder):
@@ -249,7 +251,7 @@ class VidCutter:
         cut.in_filepath = video_path
         thread = cut.create_thread(download_finish_event)
         thread.name = f"Thread [cut] in_filepath: {cut.in_filepath} "
-        thread.cut = self
+        self.thread_to_cut[thread] = cut
         self.threads.append(thread)
         thread.start()
         return thread
@@ -280,6 +282,7 @@ class VidCutter:
             log('cut',
                 f"video: {cut.in_filepath} is not an url, start cutting thread normally.")
             cut_thread = cut.create_thread()
+            self.thread_to_cut[cut_thread] = cut
             self.threads.append(cut_thread)
             cut_thread.start()
 
@@ -323,34 +326,36 @@ class VidCutter:
             else:
                 self.cut_buffer.append(cut)
 
-    def print_status(self):
+    def print_and_return_status(self):
+        status_str = ""
         indent = ""
-        print("********************")
-        print("STATUS:")
-        print("********************")
-        print(f"Buffered ({len(self.cut_buffer)})")
+        status_str += "********************\n"
+        status_str += "STATUS:\n"
+        status_str += "********************\n"
+        status_str += f"Buffered ({len(self.cut_buffer)})\n"
         if self.cut_buffer:
             indent = "    "
         for cut in self.cut_buffer:
-            print(f"{indent}{cut}")
+            status_str += f"{indent}{cut}\n"
 
-        print("********************")
+        status_str += "********************\n"
         indent = ""
-        print(f"In Progress ({len(self.running)})")
+        status_str += f"In Progress ({len(self.running)})\n"
         if self.running:
             indent = "    "
         for cut in self.running:
-            print(f"{indent}{cut}")
+            status_str += f"{indent}{cut}\n"
 
-        print("********************")
+        status_str += "********************\n"
         indent = ""
-        print(f"Finished ({len(self.finished)})")
+        status_str += f"Finished ({len(self.finished)})\n"
         if self.finished:
             indent = "    "
         for cut in self.finished:
-            print(f"{indent}{cut}")
-        print("********************")
-
+            status_str += f"{indent}{cut}\n"
+        status_str += "********************\n"
+        print(status_str)
+        return status_str
 
 
 class VFCutServer:
@@ -371,20 +376,20 @@ class VFCutServer:
         self.default_working_dir = os.path.join(os.path.expanduser('~'), 'Videos')
 
     def print_status(self):
-        self.vid_cutter.print_status()
+        self.vid_cutter.print_and_return_status()
 
     def accept_wrapper(self, sock):
         conn, addr = sock.accept()  # Should be ready to read
         print("accepted connection from", addr)
         conn.setblocking(False)
-        data = types.SimpleNamespace(addr=addr, inb=b"", outb=b"")
+        data = types.SimpleNamespace(addr=addr, inb=b"", outb=b"", msg=None, error_code=0)
         events = selectors.EVENT_READ | selectors.EVENT_WRITE
         self.selector.register(conn, events, data=data)
 
     def update(self):
         self.vid_cutter.update()
 
-    def handle_arguments(self, argv):
+    def handle_arguments(self, argv, message_data=None):
         try:
             args = self.parser.parse_args(argv)
         except Exception as ex:
@@ -394,6 +399,10 @@ class VFCutServer:
             return
         log('args', args)
 
+        if args.time and not args.input:
+            log("Error", "you cannot specify a cutting time and no input file!")
+            if message_data:
+                message_data.msg = f"Error: you cannot specify a cutting time and no input file!"
         # we need to store the videos somewhere
         if args.working_dir:
             self.working_dir = args.working_dir
@@ -421,6 +430,8 @@ class VFCutServer:
                     log("in_filepath", {in_filepath})
                     if not os.path.exists(in_filepath):
                         log("error", f"filepath: {in_filepath} does not exist!")
+                        message_data.error_code = 1
+                        message_data.msg = f"Error: file path: {in_filepath} does not exist!"
                         return
 
             if self.current_cut.in_filepath and in_filepath != self.current_cut.in_filepath:
@@ -456,7 +467,10 @@ class VFCutServer:
             exit(0)
 
         if args.status:
-            self.vid_cutter.print_status()
+            status = self.vid_cutter.print_and_return_status()
+            if message_data:
+                message_data.msg = status
+
 
         if args.time:
             if self.current_cut.reset_start:
@@ -476,6 +490,8 @@ class VFCutServer:
             except Exception as ex:
                 log('exception', str(ex))
                 log('exception_details', traceback.print_exc())
+        if message_data and not message_data.msg:
+            message_data.msg = "Everything went fine :)"
 
     def service_connection(self, key, mask):
         sock = key.fileobj
@@ -484,18 +500,19 @@ class VFCutServer:
             recv_data = sock.recv(1024)  # Should be ready to read
             if recv_data:
                 recv_data = pickle.loads(recv_data)
-                self.handle_arguments(recv_data)
+                self.handle_arguments(recv_data, data)
                 print('receive: ' + repr(recv_data))
-                # data.outb += recv_data
             else:
                 print("closing connection to", data.addr)
                 self.selector.unregister(sock)
                 sock.close()
         if mask & selectors.EVENT_WRITE:
-            if data.outb:
-                print("echoing", repr(data.outb), "to", data.addr)
-                sent = sock.send(data.outb)  # Should be ready to write
-                data.outb = data.outb[sent:]
+            if data.msg:
+                complete_message = pickle.dumps([data.error_code, data.msg])
+                sent = sock.send(len(complete_message))
+                sent = sock.send(complete_message)
+                self.selector.unregister(sock)
+                sock.close()
 
     def update_and_listen_connections(self):
         while True:
@@ -504,7 +521,6 @@ class VFCutServer:
             # and update is not called until we receive another message
             events = self.selector.select(timeout=1)
             for key, mask in events:
-                print('event received')
                 if key.data is None:  # it is from the listening socket
                     self.accept_wrapper(key.fileobj)
                 else:
@@ -656,9 +672,14 @@ class VFCutClient:
         if mask & selectors.EVENT_READ:
             recv_data = sock.recv(1024)  # Should be ready to read
             if recv_data:
-                print("received", repr(recv_data), "from connection", data.connid)
-                data.recv_total += len(recv_data)
-            if not recv_data or data.recv_total == data.msg_total:
+                length = pickle.loads(recv_data)
+                recv_data = sock.recv(length)
+                error_code, msg = pickle.loads(recv_data)
+                print(msg)
+                self.selector.unregister(sock)
+                sock.close
+                exit(error_code)
+            if not recv_data:
                 print("closing connection", data.connid)
                 self.selector.unregister(sock)
                 sock.close()
@@ -672,8 +693,10 @@ class VFCutClient:
             else:
                 # directly quit after sending
                 # @Incomplete: if we want to receive something this needs to change
-                print("SENT ALL, QUITTING")
-                sys.exit(0)
+                #print("SENT ALL, QUITTING")
+                #sys.exit(0)
+                #print("READ STATUS FROM SERVER")
+                pass
 
     # CLIENT
     def connect_to_server(self, host, port):
