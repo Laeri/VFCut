@@ -377,6 +377,7 @@ class VFCutServer:
 
     def print_status(self):
         self.vid_cutter.print_and_return_status()
+        self.vid_cutter.finished.clear()
 
     def accept_wrapper(self, sock):
         conn, addr = sock.accept()  # Should be ready to read
@@ -509,7 +510,7 @@ class VFCutServer:
         if mask & selectors.EVENT_WRITE:
             if data.msg:
                 complete_message = pickle.dumps([data.error_code, data.msg])
-                sent = sock.send(len(complete_message))
+                sent = sock.send(pickle.dumps(len(complete_message)))
                 sent = sock.send(complete_message)
                 self.selector.unregister(sock)
                 sock.close()
@@ -755,8 +756,8 @@ def create_log_folders_and_files():
 
 def main():
     # temporary turn off forking, so we can debug the application better
-    if os.fork():
-        sys.exit()
+    #if os.fork():
+    #    sys.exit()
     argv = sys.argv[1:]  # remove application name
     create_log_folders_and_files()
 
